@@ -1,0 +1,529 @@
+import { Palette } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { NavItem, StatusBar, IconButton, SquareImage } from "controls.slint";
+import { TrackRow, LibraryPage } from "library.slint";
+import { PlayerBar, ExpandedPlayer } from "player.slint";
+import { DownloadsPage } from "downloads.slint";
+import { SettingsPage } from "settings.slint";
+import { CoachMark, ThemeHint, GuideStep } from "guide.slint";
+
+export component AppShell inherits Rectangle {
+    in property <length> viewport-width;
+    in property <length> viewport-height;
+    width: root.viewport-width;
+    height: root.viewport-height;
+    in-out property <int> selected-page: 0;
+    in property <[TrackRow]> tracks;
+    in property <[int]> playlist-ids: [0, -1];
+    in property <[string]> playlists: ["All music", "Favorites"];
+    in-out property <int> playlist-index: 0;
+    in-out property <string> query;
+    in-out property <string> playlist-name;
+    in-out property <string> download-url;
+    in-out property <int> download-format: 0;
+    in-out property <int> songs-sort: 0;
+    in property <string> status: "Your library is ready.";
+    in property <bool> busy: false;
+    in property <int> total-tracks: 0;
+    in property <int> album-count: 0;
+    in property <int> favorite-count: 0;
+    in property <int> current-id: -1;
+    in property <string> current-title: "Nothing playing";
+    in property <string> current-artist: "Choose a track to begin";
+    in property <image> cover;
+    in property <bool> has-cover: false;
+    in property <image> cover-expanded;
+    in property <bool> has-cover-expanded: false;
+    in property <bool> tray-available: false;
+    in property <bool> playing: false;
+    in property <float> position: 0;
+    in property <float> duration: 0;
+    in property <string> elapsed: "0:00";
+    in property <string> total-time: "0:00";
+    in-out property <float> volume: 70;
+    in-out property <bool> shuffle: false;
+    in-out property <int> repeat-mode: 0;
+    in-out property <bool> glass: false;
+    in-out property <bool> light: false;
+    // Dark is the product default, so the shell does not start out following
+    // the system theme even before Rust has set the saved preference.
+    in-out property <bool> theme-follow-system: false;
+    in property <bool> system-light: false;
+    in property <bool> reduce-motion: false;
+    in property <bool> glass-available: false;
+    in-out property <bool> low-power: true;
+    in-out property <bool> rail-collapsed: false;
+    in property <string> downloader-path: "Not selected";
+    in property <string> download-folder: "Not selected";
+    in property <string> data-folder;
+    in property <string> download-status: "Paste a YouTube or YouTube Music link.";
+    in property <string> download-history;
+    in property <float> download-progress: 0;
+    in property <bool> downloading: false;
+    // Decoded in Rust at startup so the developer card carries no plain text.
+    in property <string> dev-name;
+    in property <string> dev-role;
+    in property <string> dev-portfolio;
+    in property <string> dev-github-url;
+    in property <string> dev-portfolio-url;
+    in property <image> dev-photo;
+    in property <bool> theme-hint: false;
+    callback hide-to-tray;
+    callback transport-changed;
+    callback import-files(bool);
+    callback import-playlist;
+    callback prune-missing;
+    callback rail-changed(bool);
+    callback play-track(int);
+    callback favorite-track(int);
+    callback remove-track(int);
+    callback add-to-playlist(int, int);
+    callback remove-from-playlist(int);
+    callback filter-changed(int, string);
+    callback sort-changed(int);
+    callback page-changed(int);
+    callback create-playlist(string);
+    callback delete-playlist;
+    callback toggle-play;
+    callback stop-play;
+    callback next-track(int);
+    callback seek(float);
+    callback volume-changed(float);
+    callback shuffle-changed(bool);
+    callback repeat-changed(int);
+    callback glass-changed(bool);
+    callback power-changed(bool);
+    callback theme-changed(int);
+    callback choose-downloader;
+    callback choose-download-folder;
+    callback start-download(string, bool);
+    callback cancel-download;
+    callback open-link(string);
+    callback open-settings;
+    callback theme-hint-dismissed;
+    callback guide-done;
+
+    // The rail auto-collapses on narrow windows and can also be closed by hand.
+    private property <bool> rail: root.viewport-width < 900px || root.rail-collapsed;
+    // One animated value drives the width, the content padding and the wordmark,
+    // so the rail slides as one piece. Driving the width alone still snapped,
+    // because the page padding switched on the same frame as the geometry.
+    private property <float> rail-open: root.rail ? 0 : 1;
+    animate rail-open { duration: Theme.normal; easing: ease-in-out; }
+    private property <length> rail-width-now: Theme.rail-compact-width
+        + (Theme.rail-width - Theme.rail-compact-width) * root.rail-open;
+    // Keep Help one full row above Expand until their horizontal hit areas
+    // separate. Reverse collapse follows the same path without crossing targets.
+    private property <length> footer-lift: root.viewport-width >= 900px
+        ? 44px * (1 - clamp((root.rail-open - 0.3) / 0.7, 0, 1)) : 0px;
+    private property <bool> compact-player: root.viewport-width < 760px;
+    private property <int> page: min(max(root.selected-page, 0), 4);
+    private property <bool> effective-light: root.theme-follow-system ? root.system-light : root.light;
+    private property <[string]> titles: ["Library", "Songs", "Search", "Downloads", "Settings"];
+    // Indices into the shape-drawn glyphs, in the same order as `titles`. They
+    // are not images: a morph needs properties to animate, and an SVG has none.
+    private property <[int]> icons: [0, 1, 2, 3, 4];
+    in-out property <bool> player-open: false;
+    in-out property <int> guide-step: 0;
+    in-out property <bool> guide-open: false;
+    // Vertical centre of the nav row the coach mark is describing. The rows sit
+    // under the rail divider at 94 px with a 4 px gap, and they tighten to
+    // 36 px on short windows, so a fixed stride pointed the tail up to 36 px
+    // above the row it meant to mark. The page comes from the step itself so
+    // the tail lands on the row the card is actually about.
+    // The three-row compact player consumes more height than the wide player.
+    // Size navigation from the space actually left above it, not window height.
+    private property <bool> tight-rail: root.viewport-height
+        - (root.viewport-height < 440px || root.viewport-width >= 760px ? 88px : 152px) < 394px;
+    private property <length> nav-row: root.tight-rail ? 40px : 44px;
+    private property <int> guide-page: root.guide-step >= 0 && root.guide-step < root.guide-steps.length
+        ? root.guide-steps[root.guide-step].page : root.page;
+    private property <length> nav-top: root.tight-rail ? 60px : 94px;
+    private property <length> guide-anchor: root.nav-top + root.guide-page * (root.nav-row + 4px) + root.nav-row / 2;
+
+    // One script per page, each declared with an explicit type. A single
+    // ternary chain of struct literals would infer an anonymous struct that
+    // Slint then refuses to convert. Downloads is the longest because that is
+    // where people expect Monolith to do something it deliberately does not do.
+    private property <[GuideStep]> guide-library: [
+        { title: "Point Monolith at your music", body: "Use Import music and pick a folder. Monolith reads the tags already inside your files, so nothing is copied, renamed or modified.", page: 0 },
+        { title: "Browse by what you have", body: "Use All music, Favorites or one of your playlists above the track list to filter your collection.", page: 0 },
+        { title: "Make a playlist", body: "New playlist creates an empty one. Add tracks with the plus button, or import an .m3u or .pls file you already use elsewhere.", page: 0 }
+    ];
+    private property <[GuideStep]> guide-songs: [
+        { title: "Your whole library, sorted", body: "Every imported track, sorted by title, artist, album or when you added it.", page: 1 },
+        { title: "Keep your originals", body: "Removing a track from Monolith forgets its library entry. The original audio file stays on disk.", page: 1 }
+    ];
+    private property <[GuideStep]> guide-search: [
+        { title: "Search never leaves this PC", body: "Typing filters your library as you go. Nothing is sent anywhere.", page: 2 },
+        { title: "Narrow it down", body: "Search matches track titles, artists and albums in your imported music.", page: 2 }
+    ];
+    private property <[GuideStep]> guide-downloads: [
+        { title: "Monolith ships without a downloader", body: "Pulling audio out of YouTube needs yt-dlp on your PATH, and converting to MP3 also needs FFmpeg. Choose the yt-dlp executable and destination folder in Settings.", page: 3 },
+        { title: "Paste a link to save", body: "Paste a YouTube or YouTube Music URL. Choose M4A or MP3, then select Download to start. Progress and errors appear below the link.", page: 3 },
+        { title: "Pick the format deliberately", body: "M4A saves the original audio. MP3 converts it using FFmpeg.", page: 3 },
+        { title: "What happens to the file", body: "The track lands in your download folder and joins your library. Your files are never overwritten; if something with that name is already there you are told and nothing is replaced.", page: 3 }
+    ];
+    private property <[GuideStep]> guide-settings: [
+        { title: "Everything stays on this PC", body: "Your library is one SQLite file in your app data folder. There is no account and nothing is synced.", page: 4 },
+        { title: "Theme, rendering and power", body: "Dark is the default. Low-power rendering swaps the GPU renderer for the software one, which uses less memory and suits a laptop better.", page: 4 },
+        { title: "Tidy up after a reshuffle", body: "If you reorganise your music outside Monolith, run Scan for missing files to drop the rows whose files have gone.", page: 4 }
+    ];
+    // The first run walks the whole app, so the card travels with it instead of
+    // sitting on Downloads while it talks about Settings.
+    private property <[GuideStep]> guide-tour: [
+        { title: "Everything lives on this PC", body: "Monolith reads the tags inside your files and never copies, renames or modifies them. There is no account and nothing is synced.", page: 0 },
+        { title: "Your whole library, one flat list", body: "Songs is every track you have imported, sorted by title, artist, album or when you added it.", page: 1 },
+        { title: "Search that stays here", body: "Typing filters your library as you go. Nothing leaves your computer and nothing is sent anywhere.", page: 2 },
+        { title: "Monolith ships without a downloader", body: "Saving a link needs yt-dlp on your PATH, and converting to MP3 also needs FFmpeg. Choose the yt-dlp executable and destination folder in Settings.", page: 3 },
+        { title: "Paste a link to save", body: "Choose M4A or MP3, then select Download to start. Progress and errors appear below the link. Your files are never overwritten.", page: 3 },
+        { title: "One SQLite file, and that is all", body: "Everything is in your app data folder. Run Scan for missing files if you reorganise your music outside Monolith.", page: 4 }
+    ];
+    // Set by the first run, cleared whenever the help button is used instead.
+    in-out property <bool> guide-touring: false;
+    private property <[GuideStep]> guide-steps: root.guide-touring ? root.guide-tour
+        : root.page == 0 ? root.guide-library
+        : root.page == 1 ? root.guide-songs
+        : root.page == 2 ? root.guide-search
+        : root.page == 3 ? root.guide-downloads
+        : root.guide-settings;
+    private property <bool> reveal: true;
+    private property <bool> resetting: false;
+    changed page => {
+        root.resetting = true;
+        root.reveal = false;
+        // Only the help button is per-page. A tour keeps its own position while
+        // it moves the app between sections.
+        if !root.guide-touring {
+            root.guide-step = 0;
+        }
+    }
+    init => {
+        Palette.color-scheme = root.effective-light ? ColorScheme.light : ColorScheme.dark;
+        Theme.glass = root.glass;
+        Theme.light = root.effective-light;
+        Theme.reduce-motion = root.reduce-motion;
+    }
+    changed effective-light => {
+        Palette.color-scheme = root.effective-light ? ColorScheme.light : ColorScheme.dark;
+        Theme.light = root.effective-light;
+    }
+    changed system-light => { Theme.light = root.effective-light; }
+    changed theme-follow-system => { Theme.light = root.effective-light; }
+    changed light => { Theme.light = root.effective-light; }
+    Timer {
+        interval: 30ms;
+        running: root.resetting;
+        triggered => { root.resetting = false; root.reveal = true; }
+    }
+
+    Rectangle { background: Theme.canvas; }
+    VerticalLayout {
+        spacing: 0px;
+        HorizontalLayout {
+            vertical-stretch: 1;
+            Rectangle {
+                width: root.rail-width-now;
+                background: Theme.sidebar;
+                clip: true;
+                Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.border; }
+                // The logo always fills its square rounded frame, so it never
+                // letterboxes or distorts when the rail changes width.
+                if !(root.viewport-width < 900px && root.tight-rail): SquareImage {
+                                x: ((parent.width - self.width) / 2) * (1 - root.rail-open) + 20px * root.rail-open;
+                                y: 20px;
+                                height: Theme.rail-logo-size;
+                                radius: 10px;
+                                // Two copies of the mark: the 72 px one is an exact 2:1
+                                // reduction of the 36 px box, while a 256 px source scaled
+                                // all the way down renders visibly pixelated. Corners are
+                                // rounded in the asset because Slint only clips to
+                                // rectangular bounds.
+                                source: @image-url("../assets/monolith-mark-72.png");
+                                label: "Monolith";
+                            }
+                // Faded rather than switched: a hard `if` made the wordmark pop
+                // on the frame the rail started moving.
+                if root.rail-open > 0.02 && root.viewport-height >= 300px: Text {
+                    x: 68px;
+                    y: 20px;
+                    width: max(0px, parent.width - 84px);
+                    height: 36px;
+                    text: "monolith";
+                    color: Theme.foreground;
+                    font-size: 21px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    opacity: root.rail-open;
+                }
+                Rectangle {
+                    x: root.rail ? 14px : 16px;
+                    y: root.nav-top - 12px;
+                    width: parent.width - (root.rail ? 28px : 32px);
+                    height: 1px;
+                    background: Theme.border;
+                }
+                // A short window used to push the lower nav items out of the
+                // rail, so the list scrolls instead of overflowing.
+                Flickable {
+                    x: 0px;
+                    y: root.nav-top;
+                    width: parent.width;
+                    height: max(0px, parent.height - root.nav-top - (root.tight-rail && root.viewport-width < 900px ? 12px : 64px + root.footer-lift));
+                    viewport-width: root.rail-width-now;
+                    viewport-height: nav.preferred-height;
+                    nav := VerticalLayout {
+                        x: 12px;
+                        width: parent.width - 24px;
+                        spacing: 4px;
+                        // A short window could only show four of the five
+                        // sections, which read as a broken rail rather than a
+                        // scrollable one. Tightening the rows keeps all five on
+                        // screen down to the 380 px floor. Not named `row`:
+                        // that is a layout property.
+                        private property <length> nav-height: root.tight-rail ? 40px : 44px;
+                        for label[index] in root.titles: NavItem {
+                            height: nav.nav-height;
+                            vertical-stretch: 0;
+                            label: label;
+                            glyph: root.icons[index];
+                            selected: root.page == index;
+                            expand: root.rail-open;
+                            clicked => { root.selected-page = index; }
+                        }
+                    }
+                }
+                if !root.rail && root.viewport-height > 700px: Rectangle {
+                    x: 16px;
+                    y: parent.height - self.height - 100px;
+                    width: parent.width - 32px;
+                    height: 78px;
+                    border-radius: Theme.radius-panel;
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 4px;
+                        Text { text: "Local by design"; color: Theme.foreground; font-size: Theme.type-body; font-weight: 600; }
+                        Text { text: "\{root.total-tracks} tracks on this PC"; color: Theme.muted; font-size: Theme.type-label; }
+                    }
+                }
+                // Utilities occupy separate 40 px slots. Short narrow windows
+                // use the brand slot for Help, leaving all five pages visible.
+                // Expansion is offered only where the expanded rail can fit.
+                // Shared rail-open geometry keeps the two slots apart mid-animation.
+                IconButton {
+                    x: 16px;
+                    y: root.tight-rail && root.viewport-width < 900px ? 8px
+                        : parent.height - self.height - 12px - root.footer-lift;
+                    size: 40px;
+                    icon-size: 17px;
+                    icon: @image-url("icons/help.svg");
+                    label: "How to use this page";
+                    clicked => {
+                        // The help button is always about the page you are on,
+                        // even if a first-run tour was interrupted.
+                        root.guide-touring = false;
+                        root.guide-step = 0;
+                        root.guide-open = true;
+                    }
+                }
+                if root.viewport-width >= 900px: IconButton {
+                    x: 16px + (Theme.rail-width - 72px) * root.rail-open;
+                    y: parent.height - self.height - 12px;
+                    size: 40px;
+                    icon-size: 17px;
+                    icon: @image-url("icons/panel-left.svg");
+                    // No rotation: the software renderer does not support image transforms.
+                    label: root.rail ? "Expand sidebar" : "Collapse sidebar";
+                    clicked => {
+                        root.rail-collapsed = !root.rail-collapsed;
+                        root.rail-changed(root.rail-collapsed);
+                    }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Theme.stage;
+                clip: true;
+                VerticalLayout {
+                    padding: 18px + 10px * root.rail-open;
+                    padding-left: 18px + 14px * root.rail-open;
+                    padding-right: 18px + 14px * root.rail-open;
+                    padding-bottom: 16px;
+                    spacing: 0px;
+                    ThemeHint {
+                        horizontal-stretch: 1;
+                        // One-way: dismissal is owned by Rust, which also records
+                        // that the user has seen it.
+                        shown: root.theme-hint;
+                        open-settings => { root.open-settings(); }
+                        dismissed => { root.theme-hint-dismissed(); }
+                    }
+                    Rectangle {
+                        vertical-stretch: 1;
+                        clip: true;
+                        Rectangle {
+                            x: 0px;
+                            y: root.reveal ? 0px : 8px;
+                            width: parent.width;
+                            height: parent.height;
+                            opacity: root.reveal ? 1 : 0;
+                            animate y, opacity { duration: root.resetting ? 0ms : Theme.slow; }
+                            if root.page < 3: LibraryPage {
+                                page: root.page;
+                                total-tracks: root.total-tracks;
+                                album-count: root.album-count;
+                                favorite-count: root.favorite-count;
+                                current-id: root.current-id;
+                                playing: root.playing;
+                                busy: root.busy;
+                                tracks: root.tracks;
+                                playlists: root.playlists;
+                                playlist-index <=> root.playlist-index;
+                                query <=> root.query;
+                                playlist-name <=> root.playlist-name;
+                                songs-sort <=> root.songs-sort;
+                                status: root.status;
+                                import-files(folder) => { root.import-files(folder); }
+                                import-playlist => { root.import-playlist(); }
+                                filter-changed(index, text) => { root.filter-changed(index, text); }
+                                sort-changed(order) => { root.sort-changed(order); }
+                                create-playlist(name) => { root.create-playlist(name); }
+                                delete-playlist => { root.delete-playlist(); }
+                                play-track(id) => { root.play-track(id); }
+                                toggle-play => { root.toggle-play(); }
+                                favorite-track(id) => { root.favorite-track(id); }
+                                remove-track(id) => { root.remove-track(id); }
+                                add-to-playlist(id, index) => { root.add-to-playlist(id, index); }
+                                remove-from-playlist(id) => { root.remove-from-playlist(id); }
+                            }
+                            if root.page == 3: DownloadsPage {
+                                compact: root.rail;
+                                download-folder: root.download-folder;
+                                download-status: root.download-status;
+                                download-history: root.download-history;
+                                download-progress: root.download-progress;
+                                downloading: root.downloading;
+                                url <=> root.download-url;
+                                format <=> root.download-format;
+                                start-download(url, mp3) => { root.start-download(url, mp3); }
+                                cancel-download => { root.cancel-download(); }
+                            }
+                            if root.page == 4: SettingsPage {
+                                compact: root.rail;
+                                light <=> root.light;
+                                theme-follow-system <=> root.theme-follow-system;
+                                system-light: root.system-light;
+                                glass <=> root.glass;
+                                glass-available: root.glass-available;
+                                low-power <=> root.low-power;
+                                tray-available: root.tray-available;
+                                downloader-path: root.downloader-path;
+                                download-folder: root.download-folder;
+                                data-folder: root.data-folder;
+                                downloading: root.downloading;
+                                hide-to-tray => { root.hide-to-tray(); }
+                                import-files(folder) => { root.import-files(folder); }
+                                import-playlist => { root.import-playlist(); }
+                                prune-missing => { root.prune-missing(); }
+                                glass-changed(value) => { root.glass-changed(value); }
+                                power-changed(value) => { root.power-changed(value); }
+                                theme-changed(value) => { root.theme-changed(value); }
+                                choose-downloader => { root.choose-downloader(); }
+                                choose-download-folder => { root.choose-download-folder(); }
+                                dev-name: root.dev-name;
+                                dev-role: root.dev-role;
+                                dev-portfolio: root.dev-portfolio;
+                                dev-github-url: root.dev-github-url;
+                                dev-portfolio-url: root.dev-portfolio-url;
+                                dev-photo: root.dev-photo;
+                                open-link(url) => { root.open-link(url); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        PlayerBar {
+            horizontal-stretch: 1;
+            compact: root.compact-player;
+            tiny: root.viewport-height < 440px;
+            current-id: root.current-id;
+            current-title: root.current-title;
+            current-artist: root.current-artist;
+            cover: root.cover;
+            has-cover: root.has-cover;
+            playing: root.playing;
+            position: root.position;
+            duration: root.duration;
+            elapsed: root.elapsed;
+            total-time: root.total-time;
+            volume <=> root.volume;
+            shuffle <=> root.shuffle;
+            repeat-mode <=> root.repeat-mode;
+            has-tracks: root.tracks.length > 0;
+            toggle-play => { root.toggle-play(); }
+            stop-play => { root.stop-play(); }
+            next-track(direction) => { root.next-track(direction); }
+            seek(value) => { root.seek(value); }
+            volume-changed(value) => { root.volume-changed(value); }
+            shuffle-changed(value) => { root.shuffle = value; root.shuffle-changed(value); }
+            repeat-changed(value) => { root.repeat-mode = value; root.repeat-changed(value); }
+            open-expanded => { root.player-open = true; }
+        }
+    }
+    ExpandedPlayer {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        z: 10;
+        shown: root.player-open;
+        current-id: root.current-id;
+        current-title: root.current-title;
+        current-artist: root.current-artist;
+        cover: root.cover-expanded;
+        has-cover: root.has-cover-expanded;
+        playing: root.playing;
+        position: root.position;
+        duration: root.duration;
+        elapsed: root.elapsed;
+        total-time: root.total-time;
+        volume <=> root.volume;
+        shuffle <=> root.shuffle;
+        repeat-mode <=> root.repeat-mode;
+        closed => { root.player-open = false; }
+        toggle-play => { root.toggle-play(); }
+        next-track(direction) => { root.next-track(direction); }
+        seek(value) => { root.seek(value); }
+        volume-changed(value) => { root.volume-changed(value); }
+        shuffle-changed(value) => { root.shuffle = value; root.shuffle-changed(value); }
+        repeat-changed(value) => { root.repeat-mode = value; root.repeat-changed(value); }
+        hide-to-tray => { root.hide-to-tray(); }
+    }
+    CoachMark {
+        shown: root.guide-open;
+        steps: root.guide-steps;
+        step <=> root.guide-step;
+        // The card follows the app: every step names the page it is about.
+        step-changed(value) => {
+            if root.guide-touring && value >= 0 && value < root.guide-steps.length {
+                root.selected-page = root.guide-steps[value].page;
+            }
+        }
+        anchor-y: root.guide-anchor;
+        rail-width: root.rail-width-now;
+        viewport-width: root.viewport-width;
+        viewport-height: root.viewport-height;
+        // The card must clear the page header and the player bar, or it hides
+        // the very controls the guide is explaining.
+        header-height: 120px;
+        footer-inset: Theme.player-height;
+        compact: root.rail;
+        closed => { root.guide-open = false; }
+        finished => { root.guide-open = false; root.guide-done(); }
+    }
+}

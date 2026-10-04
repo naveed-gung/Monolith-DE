@@ -1,0 +1,178 @@
+// Morphing sidebar glyphs.
+//
+// The nav icons used to be SVG images that grew slightly on hover. That is a
+// scale, not a state change, and it read as a generic "alive" wobble. Each
+// glyph here is drawn from shapes instead, because Slint cannot interpolate
+// between two vector paths: an image cross-fade is a swap, not a morph.
+//
+// `active` is the animated 0..1 the click drives. Every property below moves
+// continuously between the two states, so there is no frame at which the icon
+// jumps. Only the two diagonal glyphs need tiny Paths; others use rectangles.
+
+import { Theme } from "theme.slint";
+
+// Shared 24x24 box. Everything is drawn in these units and the parent scales
+// the whole component, so a glyph never has to know its pixel size.
+component GlyphBox inherits Rectangle {
+    in property <int> kind;
+    in property <float> active;
+    in property <color> tint;
+    width: 24px;
+    height: 24px;
+
+    // A 2 px stroke at this size reads as the same weight as the old 1.5 px
+    // SVG outlines without the scaling artefacts.
+    private property <float> unit: root.width / 24px;
+
+    // ---- 0: Library. A stack that rights itself. -------------------------
+    if root.kind == 0: Rectangle {
+        x: (3px * root.unit);
+        y: (6px * root.unit);
+        width: (18px * root.unit);
+        height: (12px * root.unit);
+        // Books square up through width and position, supported by both renderers.
+
+        for row[index] in 3: Rectangle {
+            x: (0px * root.unit);
+            // The stack tightens as it rights: the outer books close in.
+            y: (1px * root.unit) + index * (4px * root.unit) + (index == 1 ? -(1px * root.unit) * (1 - root.active) : (0px * root.unit));
+            width: (18px * root.unit) - index * (2px * root.unit) * (1 - root.active);
+            height: (2.5px * root.unit);
+            border-radius: (1.25px * root.unit);
+            background: root.tint;
+            opacity: index == 1 ? 1 : 0.72;
+        }
+    }
+
+    // ---- 1: Songs. A note that becomes an equaliser. ---------------------
+    if root.kind == 1: Rectangle {
+        x: (3px * root.unit);
+        y: (3px * root.unit);
+        width: (18px * root.unit);
+        height: (18px * root.unit);
+        // The note, dissolving as the bars arrive.
+        opacity: 1 - root.active;
+        Rectangle {
+            x: (4px * root.unit); y: (11px * root.unit); width: (5px * root.unit); height: (4px * root.unit);
+            border-radius: (2.5px * root.unit); background: root.tint;
+        }
+        Rectangle {
+            x: (12px * root.unit); y: (7px * root.unit); width: (5px * root.unit); height: (4px * root.unit);
+            border-radius: (2.5px * root.unit); background: root.tint;
+        }
+        Rectangle { x: (8px * root.unit); y: (3px * root.unit); width: (2px * root.unit); height: (9px * root.unit); background: root.tint; }
+        Rectangle { x: (16px * root.unit); y: (1px * root.unit); width: (2px * root.unit); height: (9px * root.unit); background: root.tint; }
+        Rectangle { x: (8px * root.unit); y: (2px * root.unit); width: (10px * root.unit); height: (2px * root.unit); background: root.tint; }
+    }
+    if root.kind == 1: Rectangle {
+        x: (3px * root.unit);
+        y: (3px * root.unit);
+        width: (18px * root.unit);
+        height: (18px * root.unit);
+        opacity: root.active;
+        // Heights settle at a fixed pattern so the bars read as a level meter
+        // rather than as noise. Written out rather than looped: an array of
+        // floats does not survive Slint's model inference here, and four bars
+        // are not worth a workaround. Each grows up from the baseline, so the
+        // meter rises with the state instead of fading in at full height.
+        Rectangle { x: (0px * root.unit); y: (17px * root.unit) - (10.2px * root.unit) * root.active; width: (3px * root.unit); height: (10.2px * root.unit) * root.active; border-radius: (1.5px * root.unit); background: root.tint; opacity: 0.78; }
+        Rectangle { x: (4.5px * root.unit); y: (17px * root.unit) - (12.5px * root.unit) * root.active; width: (3px * root.unit); height: (12.5px * root.unit) * root.active; border-radius: (1.5px * root.unit); background: root.tint; opacity: 0.78; }
+        Rectangle { x: (9px * root.unit); y: (17px * root.unit) - (10.9px * root.unit) * root.active; width: (3px * root.unit); height: (10.9px * root.unit) * root.active; border-radius: (1.5px * root.unit); background: root.tint; opacity: 0.78; }
+        Rectangle { x: (13.5px * root.unit); y: (17px * root.unit) - (13.6px * root.unit) * root.active; width: (3px * root.unit); height: (13.6px * root.unit) * root.active; border-radius: (1.5px * root.unit); background: root.tint; }
+    }
+
+    // ---- 2: Search. The lens widens into a pill. -------------------------
+    if root.kind == 2: Rectangle {
+        x: (3px * root.unit);
+        y: (3px * root.unit);
+        width: (18px * root.unit);
+        height: (18px * root.unit);
+        // The lens circle stretches sideways; the radius tracks the height so
+        // it stays a true stadium instead of an ellipse.
+        Rectangle {
+            x: (1px * root.unit);
+            y: (4px * root.unit);
+            width: (10px * root.unit) + (6px * root.unit) * root.active;
+            height: (10px * root.unit);
+            border-radius: (5px * root.unit);
+            border-width: (2px * root.unit);
+            border-color: root.tint;
+            background: transparent;
+        }
+    }
+    if root.kind == 2: Path {
+        x: 4px * root.unit * root.active;
+        y: 0px;
+        width: root.width; height: root.height;
+        viewbox-width: 24; viewbox-height: 24;
+        stroke: root.tint; stroke-width: 1.8px;
+        MoveTo { x: 12; y: 15; }
+        LineTo { x: 18; y: 21; }
+    }
+
+    // Arrow coordinates move directly; rotation is unsupported by the software
+    // renderer. The head stays above the tray at every intermediate state.
+    if root.kind == 3: Path {
+        width: root.width; height: root.height;
+        viewbox-width: 24; viewbox-height: 24;
+        stroke: root.tint; stroke-width: 1.8px;
+        MoveTo { x: 12; y: 3 + 2 * root.active; }
+        LineTo { x: 12; y: 15 + 2 * root.active; }
+        MoveTo { x: 7; y: 10 + 2 * root.active; }
+        LineTo { x: 12; y: 15 + 2 * root.active; }
+        LineTo { x: 17; y: 10 + 2 * root.active; }
+        MoveTo { x: 4; y: 17; }
+        LineTo { x: 4; y: 21; }
+        LineTo { x: 20; y: 21; }
+        LineTo { x: 20; y: 17; }
+    }
+
+    // ---- 4: Settings. Knobs slide to the high end. -----------------------
+    if root.kind == 4: Rectangle {
+        x: (3px * root.unit);
+        y: (3px * root.unit);
+        width: (18px * root.unit);
+        height: (18px * root.unit);
+        for track[index] in 3: Rectangle {
+            x: (0px * root.unit);
+            y: (2px * root.unit) + index * (7px * root.unit);
+            width: (18px * root.unit);
+            height: (2px * root.unit);
+            border-radius: (1px * root.unit);
+            background: root.tint;
+            opacity: 0.55;
+        }
+        for knob[index] in 3: Rectangle {
+            // The knob travels the full length of its track. Each starts at a
+            // different place, so the three read as independent controls.
+            x: (1px * root.unit) + ((13px * root.unit) - index * (3px * root.unit)) * root.active;
+            y: (1px * root.unit) + index * (7px * root.unit);
+            width: (4px * root.unit);
+            height: (4px * root.unit);
+            border-radius: (2px * root.unit);
+            background: root.tint;
+        }
+    }
+}
+
+/// The glyph a nav row shows, sized and tinted to match the row's icon.
+export component NavGlyph inherits Rectangle {
+    in property <int> kind;
+    // Animated 0..1. Set it once and let the easing do the rest.
+    in-out property <float> morph: 0;
+    // In-out rather than in, because the tint is animated: the accent has to
+    // cross-fade with the morph rather than snapping to it.
+    in-out property <color> tint: Theme.secondary;
+
+    width: 20px;
+    height: 20px;
+    // Rectangle coordinates and Path viewboxes both follow the requested size.
+    inner := GlyphBox {
+        width: root.width;
+        height: root.height;
+        kind: root.kind;
+        active: root.morph;
+        tint: root.tint;
+    }
+    animate tint { duration: Theme.fast; }
+}

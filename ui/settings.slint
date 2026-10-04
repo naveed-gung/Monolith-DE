@@ -1,0 +1,275 @@
+import { Theme } from "theme.slint";
+import { Version } from "version.slint";
+import { ScrollView } from "std-widgets.slint";
+import { Button, ButtonKind, Chip, Toggle, Card, Caption, SectionLabel, SquareImage, IconButton } from "controls.slint";
+
+component SettingRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> action;
+    in property <string> action-label;
+    in property <bool> enabled: true;
+    callback clicked;
+    min-height: 58px;
+    vertical-stretch: 0;
+    HorizontalLayout {
+        vertical-stretch: 0;
+        spacing: 14px;
+        cross-axis-alignment: center;
+        VerticalLayout {
+            spacing: 3px;
+            horizontal-stretch: 1;
+            Text { text: root.label; color: Theme.foreground; font-size: Theme.type-body; font-weight: 500; wrap: word-wrap; }
+            Text { text: root.value; color: Theme.muted; font-size: Theme.type-label; wrap: word-wrap; }
+        }
+        Button { text: root.action; enabled: root.enabled; accessible-label: root.action-label; clicked => { root.clicked(); } }
+    }
+}
+
+export component SettingsPage inherits Rectangle {
+    in property <bool> compact;
+    in-out property <bool> light;
+    in-out property <bool> theme-follow-system;
+    in property <bool> system-light;
+    in-out property <bool> glass;
+    in property <bool> glass-available;
+    in-out property <bool> low-power;
+    in property <bool> tray-available;
+    in property <string> downloader-path;
+    in property <string> download-folder;
+    in property <string> data-folder;
+    in property <bool> downloading;
+    callback hide-to-tray;
+    callback import-files(bool);
+    callback import-playlist;
+    callback prune-missing;
+    callback glass-changed(bool);
+    callback power-changed(bool);
+    callback theme-changed(int);
+    callback choose-downloader;
+    callback choose-download-folder;
+    // The developer card has no dismiss, hide or edit path. Its text arrives
+    // from Rust already decoded, so nothing here is a plain string in the
+    // binary. The card belongs in the product; what stays out of the published
+    // repository is the plaintext, and there is none to publish.
+    in property <string> dev-name;
+    in property <string> dev-role;
+    in property <string> dev-portfolio;
+    in property <string> dev-github-url;
+    in property <string> dev-portfolio-url;
+    in property <image> dev-photo;
+    callback open-link(string);
+
+    VerticalLayout {
+        spacing: 18px;
+        HorizontalLayout {
+            min-height: 52px;
+            max-height: 52px;
+            vertical-stretch: 0;
+            cross-axis-alignment: center;
+            spacing: 4px;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                Text { text: "Settings"; color: Theme.foreground; font-size: Theme.type-display; font-weight: 700; overflow: elide; }
+                Text { text: "Keep Monolith quiet, local, and light on your system."; color: Theme.secondary; font-size: Theme.type-body; overflow: elide; }
+            }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            // Track the viewport rather than the padded parent so cards stop
+            // overflowing the right edge and sitting under the scrollbar.
+            VerticalLayout {
+                horizontal-stretch: 1;
+                padding: 4px;
+                spacing: 16px;
+                alignment: start;
+                SectionLabel { text: "APPEARANCE"; }
+                Card {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        padding: root.compact ? 12px : 20px;
+                        spacing: 10px;
+                        // The label sits on its own line so the chips get the
+                        // full card width. Sharing a row meant the chips and
+                        // the label together outgrew the 420 px floor and the
+                        // last chip was clipped by the card edge.
+                        Text { text: "Theme"; color: Theme.foreground; font-size: Theme.type-body; font-weight: 500; }
+                        HorizontalLayout {
+                            vertical-stretch: 0;
+                            spacing: 7px;
+                            Chip {
+                                text: "System";
+                                selected: root.theme-follow-system;
+                                clicked => { root.theme-follow-system = true; root.theme-changed(0); }
+                            }
+                            Chip {
+                                text: "Light";
+                                selected: !root.theme-follow-system && root.light;
+                                clicked => { root.theme-follow-system = false; root.light = true; root.theme-changed(1); }
+                            }
+                            Chip {
+                                text: "Dark";
+                                selected: !root.theme-follow-system && !root.light;
+                                clicked => { root.theme-follow-system = false; root.light = false; root.theme-changed(2); }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        Caption { text: root.theme-follow-system ? "Follows your system appearance." : "Uses your saved Monolith theme."; }
+                        Rectangle { height: 1px; background: Theme.border; }
+                        Toggle {
+                            text: "Translucent background";
+                            description: root.glass-available ? "Use Windows acrylic behind Monolith." : "Unavailable on this system.";
+                            enabled: root.glass-available;
+                            checked <=> root.glass;
+                            toggled(value) => { root.glass-changed(value); }
+                        }
+                        Rectangle { height: 1px; background: Theme.border; }
+                        Toggle {
+                            text: "Low-power rendering";
+                            description: "Use the software renderer for the smallest footprint. Applies after restart.";
+                            checked <=> root.low-power;
+                            toggled(value) => { root.power-changed(value); }
+                        }
+                    }
+                }
+                SectionLabel { text: "LIBRARY"; }
+                Card {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        padding: root.compact ? 12px : 20px;
+                        spacing: 12px;
+                        Text { text: "Import music"; color: Theme.foreground; font-size: Theme.type-heading; font-weight: 600; }
+                        Caption { text: "Music/Monolith and your save folder are checked automatically while Monolith is open. New files appear after copying settles. Other folders can be imported below."; }
+                        HorizontalLayout {
+                            vertical-stretch: 0;
+                            spacing: 8px;
+                            Button { text: root.compact ? "Files" : "Import files"; label: "Import audio files"; icon: @image-url("icons/plus.svg"); clicked => { root.import-files(false); } }
+                            Button { text: root.compact ? "Folder" : "Import folder"; label: "Import music folder"; icon: @image-url("icons/folder.svg"); clicked => { root.import-files(true); } }
+                            Button { label: "Import a playlist file"; icon: @image-url("icons/import.svg"); icon-only: true; clicked => { root.import-playlist(); } }
+                        }
+                        Rectangle { height: 1px; background: Theme.border; }
+                        SettingRow {
+                            label: "Find missing files";
+                            value: "Forget library entries whose audio file is gone. Files are never deleted.";
+                            action: "Scan";
+                            action-label: "Scan for missing files";
+                            enabled: true;
+                            clicked => { root.prune-missing(); }
+                        }
+                        if root.tray-available: Rectangle { height: 1px; background: Theme.border; }
+                        if root.tray-available: SettingRow {
+                            label: "Keep listening in the tray";
+                            value: "Hide the window without stopping playback.";
+                            action: "Hide";
+                            action-label: "Hide to tray";
+                            clicked => { root.hide-to-tray(); }
+                        }
+                        Caption { text: "Library data: " + root.data-folder; color: Theme.muted; }
+                    }
+                }
+                SectionLabel { text: "DOWNLOADS"; }
+                Card {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        padding: root.compact ? 12px : 20px;
+                        SettingRow {
+                            label: "yt-dlp executable";
+                            value: root.downloader-path;
+                            action: "Choose";
+                            action-label: "Choose yt-dlp executable";
+                            enabled: !root.downloading;
+                            clicked => { root.choose-downloader(); }
+                        }
+                        Rectangle { height: 1px; background: Theme.border; }
+                        SettingRow {
+                            label: "Download folder";
+                            value: root.download-folder;
+                            action: "Choose";
+                            action-label: "Choose download folder";
+                            enabled: !root.downloading;
+                            clicked => { root.choose-download-folder(); }
+                        }
+                        Rectangle { height: 8px; }
+                        Caption { text: "YouTube extraction needs yt-dlp. MP3 conversion also needs FFmpeg on PATH."; }
+                    }
+                }
+                SectionLabel { text: "DEVELOPER"; }
+                Card {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        padding: root.compact ? 12px : 20px;
+                        spacing: 16px;
+                        HorizontalLayout {
+                            vertical-stretch: 0;
+                            spacing: 16px;
+                            // Square, rounded, and clipped so the portrait fills the
+                            // frame exactly instead of stretching. The pixels are
+                            // unsealed in Rust and arrive as an image, so the asset
+                            // on disk is unreadable.
+                            SquareImage {
+                                height: 60px;
+                                radius: Theme.radius-panel;
+                                placeholder: Theme.hero;
+                                source: root.dev-photo;
+                                label: root.dev-name;
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                vertical-stretch: 0;
+                                spacing: 3px;
+                                horizontal-stretch: 1;
+                                Text { text: root.dev-name; color: Theme.foreground; font-size: Theme.type-heading; font-weight: 600; overflow: elide; }
+                                Text { text: root.dev-role; color: Theme.secondary; font-size: Theme.type-label; overflow: elide; }
+                            }
+                        }
+                        Rectangle { height: 1px; background: Theme.border; }
+                        // Buttons rather than static text: the links have to work,
+                        // and the URL never appears as a literal in the interface.
+                        HorizontalLayout {
+                            vertical-stretch: 0;
+                            spacing: 8px;
+                            Button {
+                                text: "GitHub";
+                                accessible-label: "Open the developer's GitHub profile in your browser";
+                                clicked => { root.open-link(root.dev-github-url); }
+                            }
+                            Button {
+                                text: "Portfolio";
+                                accessible-label: "Open the developer's portfolio in your browser";
+                                clicked => { root.open-link(root.dev-portfolio-url); }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        Caption { text: root.dev-portfolio; }
+                    }
+                }
+                SectionLabel { text: "ABOUT"; }
+                Card {
+                    horizontal-stretch: 1;
+                    HorizontalLayout {
+                        vertical-stretch: 0;
+                        padding: root.compact ? 12px : 20px;
+                        spacing: 14px;
+                        SquareImage {
+                            height: 44px;
+                            radius: Theme.radius-control;
+                            placeholder: Theme.accent-soft;
+                            source: @image-url("../assets/monolith-mark.png");
+                            label: "Monolith Desktop";
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            vertical-stretch: 0;
+                            spacing: 3px;
+                            horizontal-stretch: 1;
+                            Text { text: "Monolith Desktop"; color: Theme.foreground; font-size: Theme.type-heading; font-weight: 600; }
+                            Caption { text: "Version " + Version.value + " · Native music player"; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

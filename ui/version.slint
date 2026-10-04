@@ -1,0 +1,8 @@
+// Single source of truth for the version shown in the UI.
+//
+// It lives on its own because `app.slint` pulls in every page and a page that
+// imported it back would be a cycle. `version.rs` has a test that fails if this
+// string drifts from Cargo.toml, the installer package or the Windows resource.
+export global Version {
+    out property <string> value: "0.3.0";
+}

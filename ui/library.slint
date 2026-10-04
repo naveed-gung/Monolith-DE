@@ -1,0 +1,490 @@
+import { Theme } from "theme.slint";
+import { ListView } from "std-widgets.slint";
+import { Button, ButtonKind, IconButton, TextField, Chip, StatusBar, SectionLabel, Caption } from "controls.slint";
+
+export struct TrackRow {
+    id: int,
+    title: string,
+    detail: string,
+    duration: string,
+    favorite: bool
+}
+
+component TrackItem inherits Rectangle {
+    in property <TrackRow> track;
+    in property <bool> current;
+    in property <bool> playing;
+    in property <bool> compact;
+    in property <bool> custom-list;
+    in property <bool> can-add;
+    callback play;
+    callback activate;
+    callback toggle-favorite;
+    callback collect;
+    callback remove;
+
+    private property <bool> focus-visible;
+    private property <bool> hot: touch.has-hover || heart.hovered || collect-button.hovered || remove-button.hovered;
+    height: 52px;
+    forward-focus: focus;
+    accessible-role: list-item;
+    accessible-label: root.track.title;
+    accessible-description: root.track.detail;
+    accessible-action-default => { root.activate(); }
+    Rectangle {
+        x: 0px;
+        width: parent.width;
+        height: parent.height;
+        border-radius: Theme.radius-control;
+        background: root.current ? Theme.accent-soft : root.hot ? Theme.hover : transparent;
+        border-width: root.focus-visible ? 2px : 0px;
+        border-color: Theme.accent;
+        animate background { duration: Theme.fast; }
+        // The per-row buttons are declared after this area, so they keep
+        // receiving their own clicks and only the bare row plays.
+        touch := TouchArea {
+            clicked => { root.activate(); }
+        }
+        focus := FocusScope {
+            width: 0px;
+            focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+            focus-lost(reason) => { root.focus-visible = false; }
+            key-pressed(event) => {
+                if event.text == " " || event.text == "\n" {
+                    root.activate();
+                    return accept;
+                }
+                return reject;
+            }
+        }
+        Rectangle {
+            x: 0px;
+            y: 10px;
+            width: 3px;
+            height: root.current ? 32px : 0px;
+            border-radius: 2px;
+            background: Theme.accent;
+            animate height { duration: Theme.fast; }
+        }
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 6px;
+            spacing: 3px;
+            cross-axis-alignment: center;
+            IconButton {
+                size: 40px;
+                icon: root.current && root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg");
+                active: root.current;
+                label: (root.current && root.playing ? "Pause " : "Play ") + root.track.title;
+                clicked => { root.play(); }
+            }
+            VerticalLayout {
+                spacing: 1px;
+                horizontal-stretch: 1;
+                Text {
+                    text: root.track.title;
+                    color: root.current ? Theme.accent : Theme.foreground;
+                    font-size: Theme.type-body;
+                    font-weight: root.current ? 600 : 500;
+                    overflow: elide;
+                    animate color { duration: Theme.fast; }
+                }
+                Text { text: root.track.detail; color: Theme.muted; font-size: Theme.type-label; overflow: elide; }
+            }
+            if !root.compact: Text {
+                text: root.track.duration;
+                width: 46px;
+                color: Theme.muted;
+                font-size: Theme.type-label;
+                horizontal-alignment: right;
+            }
+            Rectangle { width: 4px; }
+            heart := IconButton {
+                icon: root.track.favorite ? @image-url("icons/heart-filled.svg") : @image-url("icons/heart.svg");
+                label: "Favorite";
+                checkable: true;
+                active: root.track.favorite;
+                clicked => { root.toggle-favorite(); }
+            }
+            collect-button := IconButton {
+                icon: root.custom-list ? @image-url("icons/list-minus.svg") : @image-url("icons/list-plus.svg");
+                label: root.custom-list ? "Remove from this playlist" : "Add to a playlist";
+                enabled: root.custom-list || root.can-add;
+                clicked => { root.collect(); }
+            }
+            remove-button := IconButton {
+                icon: @image-url("icons/x.svg");
+                label: "Remove from library; keep original file";
+                clicked => { root.remove(); }
+            }
+        }
+    }
+}
+
+component EmptyLibrary inherits Rectangle {
+    callback choose-folder;
+    callback import-files;
+    callback new-playlist;
+    callback import-playlist;
+    in property <bool> compact;
+    in property <bool> condensed;
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: Theme.radius-panel;
+        clip: true;
+        background: Theme.hero;
+        border-width: 1px;
+        border-color: Theme.border;
+        Rectangle {
+            x: parent.width - 360px;
+            y: -220px;
+            width: 560px;
+            height: 560px;
+            background: @radial-gradient(circle, Theme.accent.with-alpha(0.13) 0%, Theme.accent.with-alpha(0) 68%);
+        }
+        HorizontalLayout {
+            padding: root.condensed ? 16px : root.compact ? 24px : 34px;
+            spacing: 28px;
+            VerticalLayout {
+                alignment: center;
+                spacing: 10px;
+                horizontal-stretch: 1;
+                if !root.condensed: SectionLabel { text: "YOUR MUSIC LIBRARY"; color: Theme.accent; }
+                Text {
+                    text: root.condensed ? "Make room for music." : "Bring your collection\ninto focus.";
+                    color: Theme.foreground;
+                    font-size: root.condensed ? Theme.type-heading : root.compact ? 25px : 32px;
+                    font-weight: 700;
+                    wrap: word-wrap;
+                }
+                if !root.condensed: Caption { text: "Choose a folder or add individual audio files. Originals stay where they are."; horizontal-alignment: left; }
+                if !root.condensed: Rectangle { height: 8px; }
+                HorizontalLayout {
+                    vertical-stretch: 0;
+                    spacing: 9px;
+                    Button {
+                        kind: ButtonKind.primary;
+                        text: "Choose folder";
+                        icon-only: root.condensed && root.compact;
+                        icon: @image-url("icons/folder.svg");
+                        clicked => { root.choose-folder(); }
+                    }
+                    if !root.compact: Button {
+                        text: "Import files";
+                        icon: @image-url("icons/plus.svg");
+                        clicked => { root.import-files(); }
+                    }
+                    Button {
+                        text: "New playlist";
+                        icon-only: root.condensed && root.compact;
+                        icon: @image-url("icons/playlist.svg");
+                        clicked => { root.new-playlist(); }
+                    }
+                    Button {
+                        label: "Import a playlist file";
+                        icon: @image-url("icons/import.svg");
+                        icon-only: true;
+                        clicked => { root.import-playlist(); }
+                    }
+                }
+            }
+            if !root.compact && !root.condensed: Image {
+                width: 176px;
+                source: @image-url("icons/record.svg");
+                image-fit: contain;
+                accessible-role: none;
+            }
+        }
+    }
+}
+
+export component LibraryPage inherits Rectangle {
+    in property <int> page;
+    in property <int> total-tracks;
+    in property <int> album-count;
+    in property <int> favorite-count;
+    in property <int> current-id;
+    in property <bool> playing;
+    in property <bool> busy;
+    in property <[TrackRow]> tracks;
+    in property <[string]> playlists;
+    in-out property <int> playlist-index;
+    in-out property <string> query;
+    in-out property <string> playlist-name;
+    in property <string> status;
+    callback import-files(bool);
+    callback import-playlist;
+    callback filter-changed(int, string);
+    callback create-playlist(string);
+    callback delete-playlist;
+    callback play-track(int);
+    callback toggle-play;
+    callback favorite-track(int);
+    callback remove-track(int);
+    callback add-to-playlist(int, int);
+    callback remove-from-playlist(int);
+
+    private property <bool> compact: root.width < 720px;
+    /// The narrow floor, where only one action can survive the header row.
+    private property <bool> very-compact: root.width < 560px;
+    in-out property <int> songs-sort: 0;
+    callback sort-changed(int);
+    private property <[string]> sort-labels: ["Title", "Artist", "Album", "Added"];
+    private property <bool> short: root.height < 610px;
+    private property <bool> has-filter: root.page == 2 || root.total-tracks > 0;
+    private property <int> pending-add-id: -1;
+    private property <bool> creating: false;
+    private property <string> title: root.page == 0 ? "Library" : root.page == 1 ? "Songs" : "Search";
+    private property <string> subtitle: root.total-tracks == 0
+        ? "A focused home for the music already on this device"
+        : "\{root.total-tracks} tracks · \{root.album-count} albums · \{root.favorite-count} favorites";
+
+    VerticalLayout {
+        padding: 0px;
+        spacing: root.short ? 8px : 14px;
+        Rectangle { height: 0px; }
+        HorizontalLayout {
+            min-height: 52px;
+            max-height: 52px;
+            vertical-stretch: 0;
+            spacing: root.short ? 8px : 14px;
+            cross-axis-alignment: center;
+            VerticalLayout {
+                spacing: 3px;
+                horizontal-stretch: 1;
+                min-width: 0px;
+                Text { text: root.title; color: Theme.foreground; font-size: Theme.type-display; font-weight: 700; overflow: elide; }
+                Text { text: root.subtitle; color: Theme.secondary; font-size: Theme.type-body; overflow: elide; }
+            }
+            // Playlist creation and import stay visible on every page so the
+            // entry points are never hidden behind a track-count condition.
+            // At the narrow floor this row ran past the right edge. Nothing is
+            // hidden, because every one of these is an entry point the user
+            // asked to keep reachable; the labels simply drop away and the
+            // title gives up its width instead.
+            if root.page != 2: HorizontalLayout {
+                vertical-stretch: 0;
+                spacing: 8px;
+                Button {
+                    kind: root.creating ? ButtonKind.primary : ButtonKind.secondary;
+                    text: root.compact ? "New" : "New playlist";
+                    label: "Create a playlist";
+                    icon: @image-url("icons/plus.svg");
+                    icon-only: root.very-compact;
+                    enabled: !root.busy;
+                    clicked => { root.creating = !root.creating; root.playlist-name = ""; }
+                }
+                Button {
+                    label: "Import playlist file";
+                    icon: @image-url("icons/import.svg");
+                    icon-only: true;
+                    enabled: !root.busy;
+                    clicked => { root.import-playlist(); }
+                }
+                if root.total-tracks > 0: Button {
+                    kind: ButtonKind.primary;
+                    text: root.compact ? "Import" : "Import music";
+                    label: "Import music";
+                    icon: @image-url("icons/folder.svg");
+                    icon-only: root.compact;
+                    enabled: !root.busy;
+                    clicked => { root.import-files(false); }
+                }
+            }
+        }
+        if root.total-tracks == 0 && root.page != 2: EmptyLibrary {
+            vertical-stretch: 1;
+            min-height: root.height < 400px ? 112px : 260px;
+            compact: root.compact;
+            condensed: root.height < 400px;
+            choose-folder => { root.import-files(true); }
+            import-files => { root.import-files(false); }
+            new-playlist => { root.creating = true; root.playlist-name = ""; }
+            import-playlist => { root.import-playlist(); }
+        }
+        if root.has-filter: TextField {
+            icon: @image-url("icons/search.svg");
+            placeholder: root.page == 2 ? "Search your library" : "Filter this collection";
+            label: "Search library";
+            text <=> root.query;
+            edited(text) => { root.filter-changed(root.playlist-index, text); }
+        }
+        // One playlist strip for every size. It stays visible with an empty
+        // library so playlists can be created before any track is imported.
+        // Library filters by playlist, Songs sorts the whole library, and
+        // Search is a text view over whichever of the two is active. The two
+        // chip rows are mutually exclusive so the control under the search box
+        // always means one thing.
+        if root.page == 0: HorizontalLayout {
+            min-height: 32px;
+            max-height: 32px;
+            vertical-stretch: 0;
+            spacing: 7px;
+            Flickable {
+                height: 32px;
+                // Same reason as the Settings theme row: a Flickable defaults to
+                // a minimum equal to its viewport width.
+                min-width: 0px;
+                horizontal-stretch: 1;
+                viewport-width: playlist-chips.preferred-width;
+                playlist-chips := HorizontalLayout {
+                    spacing: 7px;
+                    for name[index] in root.playlists: Chip {
+                        text: name;
+                        selected: root.playlist-index == index;
+                        clicked => {
+                            root.playlist-index = index;
+                            root.filter-changed(index, root.query);
+                        }
+                    }
+                }
+            }
+            if root.playlist-index > 1: IconButton {
+                size: 32px;
+                icon-size: 17px;
+                icon: @image-url("icons/trash.svg");
+                label: "Delete this playlist";
+                clicked => { root.delete-playlist(); }
+            }
+        }
+        if root.page == 1: HorizontalLayout {
+            min-height: 32px;
+            max-height: 32px;
+            vertical-stretch: 0;
+            spacing: 7px;
+            // The label and the chips sit together; a stretched scroller would
+            // strand the label on the far left of an empty row.
+            Caption { text: "Sort by"; vertical-alignment: center; horizontal-stretch: 0; }
+            Flickable {
+                height: 32px;
+                min-width: 0px;
+                horizontal-stretch: 0;
+                viewport-width: sort-chips.preferred-width;
+                max-width: sort-chips.preferred-width;
+                sort-chips := HorizontalLayout {
+                    spacing: 7px;
+                    for label[index] in root.sort-labels: Chip {
+                        text: label;
+                        selected: root.songs-sort == index;
+                        clicked => { root.songs-sort = index; root.sort-changed(index); }
+                    }
+                }
+            }
+        }
+        if root.creating: Rectangle {
+            min-height: 54px;
+            max-height: 54px;
+            vertical-stretch: 0;
+            border-radius: Theme.radius-control;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.accent.with-alpha(0.35);
+            HorizontalLayout {
+                padding: 5px;
+                padding-left: 12px;
+                spacing: 7px;
+                TextField {
+                    placeholder: "Name your playlist";
+                    label: "New playlist name";
+                    text <=> root.playlist-name;
+                    accepted(text) => {
+                        if text != "" {
+                            root.create-playlist(text);
+                            root.creating = false;
+                        }
+                    }
+                }
+                Button {
+                    kind: ButtonKind.primary;
+                    text: "Create";
+                    enabled: root.playlist-name != "";
+                    clicked => {
+                        root.create-playlist(root.playlist-name);
+                        root.creating = false;
+                    }
+                }
+                IconButton {
+                    icon: @image-url("icons/x.svg");
+                    label: "Cancel new playlist";
+                    clicked => { root.creating = false; }
+                }
+            }
+        }
+        if root.pending-add-id >= 0: Rectangle {
+            min-height: 54px;
+            max-height: 54px;
+            vertical-stretch: 0;
+            border-radius: Theme.radius-control;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.accent.with-alpha(0.35);
+            HorizontalLayout {
+                padding: 5px;
+                padding-left: 12px;
+                spacing: 7px;
+                Text { text: "Add to"; color: Theme.secondary; font-size: Theme.type-label; }
+                Flickable {
+                    height: 32px;
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                    viewport-width: targets.preferred-width;
+                    targets := HorizontalLayout {
+                        spacing: 6px;
+                        for name[index] in root.playlists: HorizontalLayout {
+                            if index > 1: Chip {
+                                text: name;
+                                icon: @image-url("icons/playlist.svg");
+                                clicked => {
+                                    root.add-to-playlist(root.pending-add-id, index);
+                                    root.pending-add-id = -1;
+                                }
+                            }
+                        }
+                    }
+                }
+                Button {
+                    kind: ButtonKind.ghost;
+                    text: "Cancel";
+                    clicked => { root.pending-add-id = -1; }
+                }
+            }
+        }
+        if root.tracks.length > 0: ListView {
+            vertical-stretch: 1;
+            min-height: 80px;
+            vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            for track in root.tracks: TrackItem {
+                track: track;
+                current: root.current-id == track.id;
+                playing: root.playing;
+                compact: root.compact || root.short;
+                custom-list: root.playlist-index > 1;
+                can-add: root.playlists.length > 2;
+                play => {
+                    if root.current-id == track.id { root.toggle-play(); }
+                    else { root.play-track(track.id); }
+                }
+                activate => { root.play-track(track.id); }
+                toggle-favorite => { root.favorite-track(track.id); }
+                collect => {
+                    if root.playlist-index > 1 {
+                        root.remove-from-playlist(track.id);
+                    } else {
+                        root.pending-add-id = track.id;
+                    }
+                }
+                remove => { root.remove-track(track.id); }
+            }
+        }
+        if root.tracks.length == 0 && (root.total-tracks > 0 || root.page == 2): VerticalLayout {
+            vertical-stretch: 1;
+            alignment: center;
+            spacing: 5px;
+            Text { text: root.total-tracks > 0 ? "No matching tracks" : "Nothing to search yet"; color: Theme.foreground; font-size: Theme.type-heading; font-weight: 600; horizontal-alignment: center; }
+            Caption { text: root.total-tracks > 0 ? "Try another search or collection." : "Import music and it will appear here."; horizontal-alignment: center; }
+        }
+        if root.page != 2 && root.total-tracks > 0 && !root.short: StatusBar { text: root.status; }
+    }
+}

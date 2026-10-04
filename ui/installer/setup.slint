@@ -1,0 +1,167 @@
+// Shared Monolith controls and palette; all installer file work runs off-thread.
+import { Theme } from "../theme.slint";
+import { Button, ButtonKind, TextField, Toggle, ProgressBar, SquareImage, Card, Caption } from "../controls.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export component SetupWindow inherits Window {
+    title: "Monolith Setup";
+    icon: @image-url("../../assets/monolith-mark.png");
+    preferred-width: 660px;
+    preferred-height: 610px;
+    min-width: 560px;
+    min-height: 520px;
+    background: Theme.canvas;
+    default-font-family: "Segoe UI Variable";
+    default-font-size: 14px;
+    in-out property <int> step: 0;
+    in-out property <string> install-path;
+    in-out property <bool> start-menu: true;
+    in-out property <bool> desktop: false;
+    in-out property <bool> launch: true;
+    in-out property <string> status;
+    in-out property <float> progress: 0;
+    in-out property <bool> failed: false;
+    in-out property <string> version;
+    in-out property <string> heading;
+    in property <bool> updating;
+    callback browse;
+    callback install;
+    callback run-app;
+    callback quit;
+    private property <bool> busy: root.step == 3 && !root.failed;
+    private property <[string]> steps: ["Welcome", "Location", "Options", "Install"];
+
+    VerticalLayout {
+        spacing: 0px;
+        Rectangle {
+            height: 100px;
+            background: @linear-gradient(110deg, Theme.hero, Theme.surface);
+            HorizontalLayout {
+                padding-left: 28px; padding-right: 28px;
+                spacing: 14px;
+                cross-axis-alignment: center;
+                SquareImage { height: 44px; radius: 11px; source: @image-url("../../assets/monolith-mark.png"); label: "Monolith"; }
+                VerticalLayout {
+                    alignment: center; spacing: 3px;
+                    Text { text: "monolith"; color: Theme.foreground; font-size: 25px; font-weight: 700; }
+                    Caption { text: "Your music. Your own space."; }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: "v" + root.version; color: Theme.muted; font-size: 12px; }
+            }
+        }
+        HorizontalLayout {
+            height: 68px; padding-left: 28px; padding-right: 28px; spacing: 12px;
+            cross-axis-alignment: center;
+            for title[index] in root.steps: Rectangle {
+                height: 32px; horizontal-stretch: 1;
+                HorizontalLayout {
+                    spacing: 7px; cross-axis-alignment: center;
+                    Rectangle {
+                        width: 22px; height: 22px; border-radius: 11px;
+                        background: root.step >= index ? Theme.accent-soft : Theme.surface;
+                        Text { text: root.step > index ? "✓" : "\{index + 1}"; color: root.step >= index ? Theme.accent : Theme.muted; horizontal-alignment: center; vertical-alignment: center; font-size: 11px; }
+                    }
+                    Text { text: title; color: root.step == index ? Theme.foreground : Theme.muted; font-size: 12px; font-weight: root.step == index ? 600 : 400; }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+            }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            VerticalLayout {
+                padding-left: 28px; padding-right: 28px; padding-top: 8px; padding-bottom: 24px;
+                spacing: 18px; alignment: start;
+                if root.step == 0: VerticalLayout {
+                    spacing: 14px;
+                    Text { text: root.updating ? "A fresh start.\nThe same library." : "A home for your music."; color: Theme.foreground; font-size: 30px; font-weight: 700; wrap: word-wrap; }
+                    Caption { text: root.updating ? "Update Monolith on this PC. Your songs, playlists and settings stay where they are." : "A local player for the music you own. No account or cloud library required."; }
+                    Card {
+                        VerticalLayout {
+                            padding: 18px; spacing: 9px;
+                            Text { text: "Drop files. Start listening."; color: Theme.foreground; font-size: 16px; font-weight: 600; }
+                            Caption { text: "Put audio in Music/Monolith. While the app is open, settled files appear in your library automatically."; }
+                            Caption { text: "Import other folders whenever you like. Your original files are never moved or deleted."; }
+                        }
+                    }
+                    Caption { min-height: 22px; text: "Installs for your Windows account. No administrator access needed."; }
+                }
+                if root.step == 1: VerticalLayout {
+                    spacing: 16px;
+                    Text { text: "Choose the app folder"; color: Theme.foreground; font-size: 24px; font-weight: 700; }
+                    Caption { text: "This location holds the app. Your music and library data stay separate and survive updates."; }
+                    Card {
+                        VerticalLayout {
+                            padding: 18px; spacing: 10px;
+                            Caption { text: "INSTALL LOCATION"; }
+                            TextField { text <=> root.install-path; label: "Install folder"; placeholder: "Absolute Windows folder path"; }
+                            HorizontalLayout {
+                                Caption { text: "The default folder is recommended."; }
+                                Rectangle { horizontal-stretch: 1; }
+                                Button { text: "Browse…"; clicked => { root.browse(); } }
+                            }
+                        }
+                    }
+                }
+                if root.step == 2: VerticalLayout {
+                    spacing: 16px;
+                    Text { text: "Make it yours"; color: Theme.foreground; font-size: 24px; font-weight: 700; }
+                    Caption { text: "Choose your shortcuts. Setup will close the installed player before updating it."; }
+                    Card {
+                        VerticalLayout {
+                            padding: 18px; spacing: 12px;
+                            Toggle { text: "Start menu"; description: "Find Monolith with Windows Search."; checked <=> root.start-menu; }
+                            Rectangle { height: 1px; background: Theme.border; }
+                            Toggle { text: "Desktop shortcut"; description: "Keep a launcher on your desktop."; checked <=> root.desktop; }
+                            Rectangle { height: 1px; background: Theme.border; }
+                            Toggle { text: "Open after setup"; description: "Launch Monolith when you select Finish."; checked <=> root.launch; }
+                        }
+                    }
+                }
+                if root.step == 3: VerticalLayout {
+                    spacing: 18px;
+                    Text { text: root.failed ? "Let's fix that" : root.heading != "" ? root.heading : root.updating ? "Updating Monolith" : "Installing Monolith"; color: root.failed ? Theme.danger : Theme.foreground; font-size: 24px; font-weight: 700; wrap: word-wrap; }
+                    Caption { text: root.status; accessible-live-region: polite; }
+                    if !root.failed: ProgressBar { progress: root.progress; }
+                    if root.failed: Caption { text: "Your music and library data are untouched. Review the message above, then try again."; }
+                    if !root.failed: Caption { text: "Please keep setup open until this finishes."; }
+                }
+                if root.step == 4: VerticalLayout {
+                    spacing: 16px;
+                    HorizontalLayout {
+                        Rectangle {
+                            width: 48px; height: 48px; border-radius: 24px; background: Theme.success.with-alpha(0.12);
+                            Text { text: "✓"; color: Theme.success; font-size: 26px; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    Text { text: "Ready for your next listen."; color: Theme.foreground; font-size: 26px; font-weight: 700; wrap: word-wrap; }
+                    Caption { text: "Monolith is installed. Add songs to Music/Monolith, or import an existing collection from the app."; }
+                    Card { VerticalLayout { padding: 18px; spacing: 6px; Caption { text: "INSTALLED TO"; } Text { text: root.install-path; color: Theme.secondary; font-size: 13px; wrap: word-wrap; } } }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+        Rectangle {
+            height: 78px; background: Theme.surface;
+            HorizontalLayout {
+                padding-left: 28px; padding-right: 28px; spacing: 10px; cross-axis-alignment: center;
+                if (root.step > 0 && root.step < 3) || root.failed: Button {
+                    text: "Back";
+                    clicked => { root.failed = false; root.step = root.step == 3 ? 2 : root.step - 1; }
+                }
+                if root.step < 3 || root.failed: Button { kind: ButtonKind.ghost; text: "Cancel"; clicked => { root.quit(); } }
+                Rectangle { horizontal-stretch: 1; }
+                if root.step < 3: Button {
+                    kind: ButtonKind.primary;
+                    text: root.step == 2 ? (root.updating ? "Install update" : "Install Monolith") : "Continue";
+                    enabled: root.step != 1 || root.install-path != "";
+                    clicked => { if root.step == 2 { root.install(); } else { root.step += 1; } }
+                }
+                if root.failed: Button { kind: ButtonKind.primary; text: "Try again"; clicked => { root.install(); } }
+                if root.step == 4: Button { kind: ButtonKind.primary; text: "Finish"; clicked => { if root.launch { root.run-app(); } else { root.quit(); } } }
+            }
+        }
+    }
+}

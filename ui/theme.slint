@@ -1,0 +1,75 @@
+// Monolith's Windows visual system. Keep every color, size, radius, and duration
+// here so light and dark surfaces never drift across the shell and player.
+export global Theme {
+    in property <bool> glass: false;
+    in property <bool> light: false;
+    // Mirrors the Windows client-area animation preference.
+    in property <bool> reduce-motion: false;
+
+    // Dark: near-black and one cool-gray family. Light: warm off-white surfaces.
+    out property <color> canvas: root.light ? #F7F6F3.with-alpha(root.glass ? 0.86 : 1) : #09090B.with-alpha(root.glass ? 0.52 : 1);
+    // The rail only tints the acrylic; it is never see-through enough for
+    // stage content to read through it.
+    out property <color> sidebar: root.light ? #F0EFEB.with-alpha(root.glass ? 0.92 : 1) : #0E0E11.with-alpha(root.glass ? 0.90 : 1);
+    out property <color> stage: root.light ? #FBFAF7.with-alpha(root.glass ? 0.84 : 1) : #0B0B0E.with-alpha(root.glass ? 0.42 : 1);
+    out property <color> bar: root.light ? #F3F2EE.with-alpha(root.glass ? 0.94 : 1) : #111114.with-alpha(root.glass ? 0.90 : 1);
+    out property <color> surface: root.light ? #FFFFFF : #151518;
+    out property <color> surface-strong: root.light ? #F0EFEB : #1B1B1F;
+    out property <color> raised: root.light ? #E8E7E2 : #202025;
+    out property <color> elevated: root.light ? #DEDDD7 : #29292F;
+    out property <color> hero: root.light ? #F8E8EB : #20171B;
+    out property <color> hover: root.light ? #E9E8E3 : #25252A;
+    out property <color> pressed: root.light ? #DDDBD5 : #303037;
+    out property <color> selected: root.light ? #F7DDE2 : #3A2229;
+    out property <color> border: root.light ? #DDDCD6 : #2B2B31;
+    out property <color> border-strong: root.light ? #C9C8C1 : #3B3B43;
+    out property <color> track: root.light ? #D5D4CE : #383840;
+    out property <color> foreground: root.light ? #151417 : #F4F3F5;
+    out property <color> secondary: root.light ? #56545C : #BDBBC3;
+    out property <color> muted: root.light ? #74717A : #8E8C96;
+    out property <color> faint: root.light ? #99969D : #64636C;
+    out property <color> accent: #E95668;
+    out property <color> accent-hover: #F06A7A;
+    out property <color> accent-pressed: #CE4053;
+    out property <color> accent-soft: #E95668.with-alpha(root.light ? 0.14 : 0.12);
+    out property <color> on-accent: #FFFFFF;
+    out property <color> danger: root.light ? #B42335 : #FF707A;
+    out property <color> danger-soft: root.light ? #B42335.with-alpha(0.10) : #FF707A.with-alpha(0.12);
+    out property <color> success: root.light ? #167A4B : #6CD69B;
+    out property <color> warning: root.light ? #966000 : #F0BE68;
+    out property <color> scrim: root.light ? #29272A.with-alpha(0.48) : #050506.with-alpha(0.72);
+
+    // Four-pixel rhythm with a denser desktop scale.
+    out property <length> space-1: 4px;
+    out property <length> space-2: 8px;
+    out property <length> space-3: 12px;
+    out property <length> space-4: 16px;
+    out property <length> space-5: 20px;
+    out property <length> space-6: 24px;
+    out property <length> space-8: 32px;
+    out property <length> space-10: 40px;
+
+    out property <length> radius-control: 9px;
+    out property <length> radius-panel: 14px;
+    out property <length> radius-artwork: 12px;
+    out property <length> radius-pill: 999px;
+    out property <length> rail-width: 224px;
+    out property <length> rail-compact-width: 72px;
+    out property <length> rail-logo-size: 36px;
+    out property <length> player-height: 88px;
+    // Three stacked rows in the compact bar: artwork, seek, transport.
+    out property <length> player-height-compact: 152px;
+
+    out property <length> type-display: 32px;
+    out property <length> type-title: 21px;
+    out property <length> type-heading: 16px;
+    out property <length> type-body: 14px;
+    out property <length> type-label: 12px;
+    out property <length> type-caption: 11px;
+
+    // No infinite animation is part of the Windows system.
+    out property <duration> duration-instant: root.reduce-motion ? 0ms : 80ms;
+    out property <duration> fast: root.reduce-motion ? 0ms : 130ms;
+    out property <duration> normal: root.reduce-motion ? 0ms : 200ms;
+    out property <duration> slow: root.reduce-motion ? 0ms : 300ms;
+}

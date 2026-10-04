@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>monolith.desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <name>Monolith</name>
+  <url type="homepage">https://github.com/naveed-gung/Monolith-DE</url>
+  <summary>A quiet, local music player</summary>
+  <description>
+    <p>
+      Monolith plays the music already on your machine. It reads the tags inside
+      your files and never copies, renames or modifies them.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Play local music, filter playlists and sort by title, artist or album</li>
+      <li>Automatically import settled audio from Music/Monolith and the save folder</li>
+      <li>Import an existing .m3u or .pls playlist</li>
+      <li>Search that stays entirely on your computer</li>
+      <li>Save links to your library with an external downloader</li>
+      <li>Dark by default, with light and system themes</li>
+      <li>Step-by-step coaching on every page</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">monolith-desktop.desktop</launchable>
+  <provides>
+    <binary>monolith-desktop</binary>
+  </provides>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Player</category>
+    <category>Music</category>
+  </categories>
+  <keywords>
+    <keyword>music</keyword>
+    <keyword>player</keyword>
+    <keyword>library</keyword>
+  </keywords>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.3.0" date="2026-09-27">
+      <description>
+        <p>First desktop release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

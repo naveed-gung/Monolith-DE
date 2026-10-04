@@ -1,0 +1,29 @@
+/target/
+/installer/target/
+/shots/
+/dist/
+/.vscode/
+*.ppm
+.env
+.env.*
+*.pem
+*.key
+*-adminsdk-*.json
+*.log
+
+# Working notes for whoever drives this repo, not part of the product. They
+# stay on disk so the build keeps its memory, and stay out of the repository so
+# they are not published with it. `docs/img` is the exception: the README
+# links those.
+/AGENTS.md
+/docs/agent/
+
+# Local visual-review captures and scratch work.
+/.work/
+
+# Private transcripts and source portraits are retained locally.
+/roo_task*.md
+/assets/profile.jpg
+/assets/profile-card.png
+/docs/img/guide.png
+/tools/encrypt_identity.py

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Monolith
+GenericName=Music Player
+Comment=A quiet, local music player
+Exec=monolith-desktop
+Icon=monolith-desktop
+Terminal=false
+Categories=AudioVideo;Audio;Player;Music;
+Keywords=music;player;audio;library;playlist;
+StartupNotify=true
+StartupWMClass=Monolith

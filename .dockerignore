@@ -1,0 +1,15 @@
+**
+!Cargo.toml
+!Cargo.lock
+!build.rs
+!LICENSE
+!src/**
+!ui/**
+!assets/**
+!examples/**
+!packaging/**
+!installer/
+!installer/Cargo.toml
+
+assets/profile.jpg
+assets/profile-card.png

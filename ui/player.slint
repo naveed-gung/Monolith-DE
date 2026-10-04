@@ -1,0 +1,391 @@
+import { Theme } from "theme.slint";
+import { IconButton, PlayButton, Slider, Button, ButtonKind, SquareImage } from "controls.slint";
+
+component PlayerArtwork inherits Rectangle {
+    in property <image> cover;
+    in property <bool> has-cover;
+    in property <length> size;
+    width: root.size;
+    height: root.size;
+    border-radius: Theme.radius-artwork;
+    background: Theme.surface-strong;
+    clip: true;
+    if root.has-cover: SquareImage {
+        width: parent.width;
+        height: parent.height;
+        radius: Theme.radius-artwork;
+        source: root.cover;
+        label: "Album artwork";
+    }
+    if !root.has-cover: Image {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.size * 0.32;
+        height: root.size * 0.32;
+        source: @image-url("icons/music.svg");
+        colorize: Theme.muted;
+        accessible-role: none;
+    }
+}
+
+component Transport inherits Rectangle {
+    in property <bool> playing;
+    in property <bool> enabled;
+    in property <int> current-id;
+    in property <bool> shuffle;
+    in property <int> repeat-mode;
+    // Drops the two secondary controls when the bar is at minimum width.
+    in property <bool> minimal: false;
+    // One knob for the whole row. The play button used to be a hard-coded
+    // 54 px circle in a row sized for 40 px buttons, which clipped.
+    in property <length> size: 40px;
+    callback toggle-play;
+    callback stop-play;
+    callback next-track(int);
+    callback shuffle-changed(bool);
+    callback repeat-changed(int);
+    HorizontalLayout {
+        spacing: 6px;
+        alignment: center;
+        cross-axis-alignment: center;
+        if !root.minimal: IconButton {
+            size: root.size;
+            icon-size: root.size * 0.5;
+            icon: @image-url("icons/shuffle.svg");
+            label: "Shuffle";
+            checkable: true;
+            active: root.shuffle;
+            clicked => { root.shuffle-changed(!root.shuffle); }
+        }
+        IconButton {
+            size: root.size;
+            icon-size: root.size * 0.5;
+            icon: @image-url("icons/previous.svg");
+            label: "Previous track";
+            enabled: root.current-id >= 0;
+            clicked => { root.next-track(-1); }
+        }
+        PlayButton {
+            size: root.size + 4px;
+            playing: root.playing;
+            enabled: root.current-id >= 0 || root.enabled;
+            clicked => { root.toggle-play(); }
+        }
+        IconButton {
+            size: root.size;
+            icon-size: root.size * 0.5;
+            icon: @image-url("icons/next.svg");
+            label: "Next track";
+            enabled: root.current-id >= 0;
+            clicked => { root.next-track(1); }
+        }
+        if !root.minimal: IconButton {
+            size: root.size;
+            icon-size: root.size * 0.5;
+            icon: root.repeat-mode == 2 ? @image-url("icons/repeat-one.svg") : @image-url("icons/repeat.svg");
+            label: root.repeat-mode == 0 ? "Repeat off" : root.repeat-mode == 1 ? "Repeat all" : "Repeat one";
+            active: root.repeat-mode > 0;
+            clicked => {
+                root.repeat-changed(mod(root.repeat-mode + 1, 3));
+            }
+        }
+    }
+}
+
+export component PlayerBar inherits Rectangle {
+    in property <bool> compact;
+    // Passed in because the bar cannot read its own height without a loop.
+    in property <bool> tiny;
+    in property <int> current-id;
+    in property <string> current-title;
+    in property <string> current-artist;
+    in property <image> cover;
+    in property <bool> has-cover;
+    in property <bool> playing;
+    in property <float> position;
+    in property <float> duration;
+    in property <string> elapsed;
+    in property <string> total-time;
+    in-out property <float> volume;
+    in-out property <bool> shuffle;
+    in-out property <int> repeat-mode;
+    in property <bool> has-tracks;
+    private property <float> restore-volume: 70;
+    callback toggle-play;
+    callback stop-play;
+    callback next-track(int);
+    callback seek(float);
+    callback volume-changed(float);
+    callback shuffle-changed(bool);
+    callback repeat-changed(int);
+    callback open-expanded;
+    callback hide-to-tray;
+
+    private property <bool> very-compact: root.width < 640px;
+    // A short window starves the rail, so the bar collapses to one row and
+    // the seek line underneath instead of three stacked rows.
+    height: root.tiny ? 88px : root.compact ? Theme.player-height-compact : Theme.player-height;
+    background: Theme.bar;
+    Rectangle { y: 0px; height: 1px; background: Theme.border; }
+    HorizontalLayout {
+        x: root.tiny ? 10px : root.compact ? 12px : 20px;
+        y: root.tiny ? 6px : root.compact ? 8px : 18px;
+        width: root.tiny ? 180px : root.compact ? (root.very-compact ? 150px : parent.width - 174px) : 250px;
+        height: root.tiny ? 44px : 52px;
+        spacing: 11px;
+        cross-axis-alignment: center;
+        // One square rounded frame holds the cover, the fallback, and the
+        // expand affordance, so the artwork can never stretch or misalign.
+        Rectangle {
+            width: root.tiny ? 40px : 52px;
+            height: root.tiny ? 40px : 52px;
+            border-radius: 10px;
+            background: Theme.surface-strong;
+            clip: true;
+            touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { if root.current-id >= 0 { root.open-expanded(); } }
+            }
+            if root.has-cover: Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.cover;
+                image-fit: ImageFit.cover;
+                accessible-role: none;
+            }
+            if !root.has-cover: Image {
+                x: 16px;
+                y: 16px;
+                width: 20px;
+                height: 20px;
+                source: @image-url("icons/music.svg");
+                colorize: Theme.muted;
+                accessible-role: none;
+            }
+            if !root.very-compact: IconButton {
+                x: 36px;
+                y: 36px;
+                size: 32px;
+                icon-size: 16px;
+                icon: @image-url("icons/record.svg");
+                label: "Open expanded player";
+                enabled: root.current-id >= 0;
+                clicked => { root.open-expanded(); }
+            }
+        }
+        VerticalLayout {
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text { text: root.current-title; color: Theme.foreground; font-size: Theme.type-body; font-weight: 600; overflow: elide; }
+            Text { text: root.current-artist; color: Theme.secondary; font-size: Theme.type-label; overflow: elide; }
+        }
+    }
+    // The compact bar stacks artwork, then the seek row, then the transport,
+    // so the controls can no longer sit on top of the slider.
+    Transport {
+        x: root.tiny ? parent.width - 166px : root.compact ? 12px : (parent.width - 300px) / 2;
+        // Pinned to y 0 the play circle filled its row and read as touching the
+        // bar's top border, so the row is inset and sized to the buttons.
+        y: root.tiny ? 6px : root.compact ? 96px : 7px;
+        width: root.tiny ? 156px : root.compact ? parent.width - 24px : 300px;
+        height: 44px;
+        size: root.tiny ? 30px : 40px;
+        minimal: root.tiny || root.very-compact;
+        playing: root.playing;
+        enabled: root.has-tracks;
+        current-id: root.current-id;
+        shuffle: root.shuffle;
+        repeat-mode: root.repeat-mode;
+        toggle-play => { root.toggle-play(); }
+        next-track(direction) => { root.next-track(direction); }
+        shuffle-changed(value) => { root.shuffle-changed(value); }
+        repeat-changed(value) => { root.repeat-changed(value); }
+    }
+    HorizontalLayout {
+        x: root.tiny ? 10px : root.compact ? 12px : 300px;
+        y: root.tiny ? 54px : root.compact ? 66px : 57px;
+        width: root.tiny ? parent.width - 20px : root.compact ? (root.very-compact ? parent.width - 48px : parent.width - 24px) : parent.width - 590px;
+        height: root.tiny ? 24px : 26px;
+        spacing: 9px;
+        cross-axis-alignment: center;
+        Text { text: root.elapsed; font-family: "Consolas"; width: 36px; color: Theme.muted; font-size: Theme.type-caption; horizontal-alignment: right; visible: !root.tiny; }
+        Slider {
+            minimum: 0;
+            maximum: max(root.duration, 1);
+            value: root.position;
+            step: 5;
+            live: false;
+            enabled: root.current-id >= 0 && root.duration > 0;
+            label: "Playback position";
+            value-text: root.elapsed + " of " + root.total-time;
+            changed(value) => { root.seek(value); }
+        }
+        Text { text: root.total-time; font-family: "Consolas"; width: 36px; color: Theme.muted; font-size: Theme.type-caption; visible: !root.tiny; }
+    }
+    HorizontalLayout {
+        visible: !root.tiny;
+        x: parent.width - 20px - self.width;
+        y: root.compact ? 10px : 18px;
+        width: root.compact ? 40px : 270px;
+        height: 52px;
+        spacing: 4px;
+        alignment: end;
+        cross-axis-alignment: center;
+        if !root.compact: IconButton {
+            icon: @image-url("icons/stop.svg");
+            label: "Stop";
+            enabled: root.current-id >= 0;
+            clicked => { root.stop-play(); }
+        }
+        if !root.very-compact: IconButton {
+            icon: root.volume <= 0 ? @image-url("icons/volume-x.svg") : @image-url("icons/volume.svg");
+            label: root.volume <= 0 ? "Unmute" : "Mute";
+            clicked => {
+                if root.volume > 0 {
+                    root.restore-volume = root.volume;
+                    root.volume = 0;
+                } else {
+                    root.volume = max(root.restore-volume, 10);
+                }
+                root.volume-changed(root.volume);
+            }
+        }
+        if !root.compact: Slider {
+            max-width: 120px;
+            minimum: 0;
+            maximum: 100;
+            step: 5;
+            value: root.volume;
+            label: "Volume";
+            value-text: "\{round(root.volume)}%";
+            changed(value) => { root.volume = value; root.volume-changed(value); }
+        }
+    }
+}
+
+export component ExpandedPlayer inherits Rectangle {
+    in property <bool> shown;
+    in property <bool> compact: root.width < 760px;
+    in property <bool> very-compact: root.width < 640px;
+    in property <int> current-id;
+    in property <string> current-title;
+    in property <string> current-artist;
+    in property <image> cover;
+    in property <bool> has-cover;
+    in property <bool> playing;
+    in property <float> position;
+    in property <float> duration;
+    in property <string> elapsed;
+    in property <string> total-time;
+    in-out property <float> volume;
+    in-out property <bool> shuffle;
+    in-out property <int> repeat-mode;
+    callback closed;
+    callback toggle-play;
+    callback next-track(int);
+    callback seek(float);
+    callback volume-changed(float);
+    callback shuffle-changed(bool);
+    callback repeat-changed(int);
+    callback hide-to-tray;
+
+    opacity: root.shown ? 1 : 0;
+    animate opacity { duration: root.shown ? Theme.normal : Theme.fast; }
+    visible: root.shown;
+    background: Theme.scrim;
+    TouchArea { clicked => { root.closed(); } }
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(parent.width - 24px, 980px);
+        height: min(parent.height - 24px, 620px);
+        border-radius: Theme.radius-panel;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        clip: true;
+        TouchArea { }
+        VerticalLayout {
+            padding: root.compact ? 14px : 26px;
+            spacing: root.compact ? 12px : 22px;
+            HorizontalLayout {
+                spacing: 12px;
+                Button {
+                    kind: ButtonKind.ghost;
+                    text: root.very-compact ? "Back" : "Back to library";
+                    icon: @image-url("icons/previous.svg");
+                    clicked => { root.closed(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                if !root.very-compact: Button {
+                    text: root.compact ? "Tray" : "Keep in tray";
+                    icon: @image-url("icons/record.svg");
+                    clicked => { root.hide-to-tray(); }
+                }
+            }
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: root.compact ? 18px : 32px;
+                PlayerArtwork {
+                    width: root.compact ? 132px : 370px;
+                    height: root.compact ? 132px : 370px;
+                    cover: root.cover;
+                    has-cover: root.has-cover;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 14px;
+                    horizontal-stretch: 3;
+                    Text { text: root.current-title; color: Theme.foreground; font-size: root.compact ? 20px : 28px; font-weight: 700; horizontal-alignment: center; wrap: word-wrap; overflow: elide; }
+                    Text { text: root.current-artist; color: Theme.accent; font-size: root.compact ? Theme.type-heading : Theme.type-title; horizontal-alignment: center; overflow: elide; }
+                    HorizontalLayout {
+                        width: 100%;
+                        spacing: root.compact ? 5px : 9px;
+                        Text { text: root.elapsed; font-family: "Consolas"; width: root.compact ? 34px : 44px; color: Theme.muted; font-size: Theme.type-label; horizontal-alignment: right; }
+                        Slider {
+                            minimum: 0;
+                            maximum: max(root.duration, 1);
+                            value: root.position;
+                            step: 5;
+                            live: false;
+                            enabled: root.current-id >= 0 && root.duration > 0;
+                            label: "Playback position";
+                            value-text: root.elapsed + " of " + root.total-time;
+                            changed(value) => { root.seek(value); }
+                        }
+                        Text { text: root.total-time; font-family: "Consolas"; width: root.compact ? 34px : 44px; color: Theme.muted; font-size: Theme.type-label; }
+                    }
+                    Transport {
+                        // The expanded view has room, so the controls can be
+                        // a step larger than in the bar.
+                        size: root.very-compact ? 34px : 46px;
+                        minimal: root.very-compact;
+                        playing: root.playing;
+                        enabled: root.current-id >= 0;
+                        current-id: root.current-id;
+                        shuffle: root.shuffle;
+                        repeat-mode: root.repeat-mode;
+                        toggle-play => { root.toggle-play(); }
+                        next-track(direction) => { root.next-track(direction); }
+                        shuffle-changed(value) => { root.shuffle-changed(value); }
+                        repeat-changed(value) => { root.repeat-changed(value); }
+                    }
+                    if !root.very-compact: HorizontalLayout {
+                        spacing: 12px;
+                        width: 100%;
+                        Text { text: "Volume"; color: Theme.secondary; font-size: Theme.type-label; }
+                        Slider {
+                            minimum: 0;
+                            maximum: 100;
+                            step: 5;
+                            value: root.volume;
+                            label: "Volume";
+                            value-text: "\{round(root.volume)}%";
+                            changed(value) => { root.volume = value; root.volume-changed(value); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

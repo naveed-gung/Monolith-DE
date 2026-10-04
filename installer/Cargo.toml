@@ -1,0 +1,23 @@
+[package]
+name = "monolith-setup"
+version = "0.3.0"
+edition = "2024"
+description = "Branded installer for Monolith Desktop"
+publish = false
+build = "build.rs"
+
+# Standalone installer workspace. It is deliberately outside the parent
+# workspace because its build script has to build the player first and then
+# embed the resulting executable.
+
+[dependencies]
+slint = { version = "=1.17.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "renderer-software", "software-renderer-path", "unstable-winit-030", "accessibility"] }
+dirs = "=6.0.0"
+
+[build-dependencies]
+slint-build = "=1.17.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

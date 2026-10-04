@@ -1,0 +1,266 @@
+import { Palette } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Version } from "version.slint";
+import { AppShell } from "shell.slint";
+import { TrackRow } from "library.slint";
+import { Button, ButtonKind } from "controls.slint";
+
+// The root component is intentionally thin. It preserves the stable public API
+// consumed by Rust while the redesigned desktop surfaces live in focused files.
+export component AppWindow inherits Window {
+    title: "Monolith";
+    // Rounded variant: a square icon reads as an unfinished asset in the
+    // Windows title bar and taskbar.
+    icon: @image-url("../assets/monolith-mark.png");
+    preferred-width: 1280px;
+    preferred-height: 820px;
+    // Logical pixels: 560x540 cannot fit a 1366x768 screen at 200% scaling
+    // (that leaves only 384 logical pixels of height), so the floor is lower.
+    min-width: 420px;
+    min-height: 380px;
+    background: transparent;
+    default-font-family: "Segoe UI Variable";
+    default-font-size: 14px;
+    private property <length> viewport-width;
+    private property <length> viewport-height;
+    in-out property <bool> player-open <=> shell.player-open;
+    changed width => { root.viewport-width = self.width; }
+    changed height => { root.viewport-height = self.height; }
+    init => { root.viewport-width = self.width; root.viewport-height = self.height; }
+
+    in-out property <int> selected-page <=> shell.selected-page;
+    in property <[TrackRow]> tracks <=> shell.tracks;
+    in property <[int]> playlist-ids <=> shell.playlist-ids;
+    in property <[string]> playlists <=> shell.playlists;
+    in-out property <int> playlist-index <=> shell.playlist-index;
+    in-out property <int> songs-sort <=> shell.songs-sort;
+    in-out property <string> query <=> shell.query;
+    in-out property <string> playlist-name <=> shell.playlist-name;
+    in-out property <string> download-url <=> shell.download-url;
+    in-out property <int> download-format <=> shell.download-format;
+    in property <string> status <=> shell.status;
+    in property <bool> busy <=> shell.busy;
+    in property <int> total-tracks <=> shell.total-tracks;
+    in property <int> album-count <=> shell.album-count;
+    in property <int> favorite-count <=> shell.favorite-count;
+    in property <int> current-id <=> shell.current-id;
+    in property <string> current-title <=> shell.current-title;
+    in property <string> current-artist <=> shell.current-artist;
+    in property <image> cover <=> shell.cover;
+    in property <bool> has-cover <=> shell.has-cover;
+    in property <image> cover-expanded <=> shell.cover-expanded;
+    in property <bool> has-cover-expanded <=> shell.has-cover-expanded;
+    in property <bool> tray-available <=> shell.tray-available;
+    in property <bool> playing <=> shell.playing;
+    in property <float> position <=> shell.position;
+    in property <float> duration <=> shell.duration;
+    in property <string> elapsed <=> shell.elapsed;
+    in property <string> total-time <=> shell.total-time;
+    in-out property <float> volume <=> shell.volume;
+    in-out property <bool> shuffle <=> shell.shuffle;
+    in-out property <int> repeat-mode <=> shell.repeat-mode;
+    in-out property <bool> glass <=> shell.glass;
+    in-out property <bool> light <=> shell.light;
+    in-out property <bool> theme-follow-system <=> shell.theme-follow-system;
+    in property <bool> system-light <=> shell.system-light;
+    in property <bool> reduce-motion <=> shell.reduce-motion;
+    in property <bool> glass-available <=> shell.glass-available;
+    in-out property <bool> low-power <=> shell.low-power;
+    in-out property <bool> rail-collapsed <=> shell.rail-collapsed;
+    in property <string> downloader-path <=> shell.downloader-path;
+    in property <string> download-folder <=> shell.download-folder;
+    in property <string> data-folder <=> shell.data-folder;
+    in property <string> download-status <=> shell.download-status;
+    in property <string> download-history <=> shell.download-history;
+    in property <float> download-progress <=> shell.download-progress;
+    in property <bool> downloading <=> shell.downloading;
+    in property <string> dev-name <=> shell.dev-name;
+    in property <string> dev-role <=> shell.dev-role;
+    in property <string> dev-portfolio <=> shell.dev-portfolio;
+    in property <string> dev-github-url <=> shell.dev-github-url;
+    in property <string> dev-portfolio-url <=> shell.dev-portfolio-url;
+    in property <image> dev-photo <=> shell.dev-photo;
+    in property <bool> theme-hint <=> shell.theme-hint;
+    in-out property <int> guide-step <=> shell.guide-step;
+    in-out property <bool> guide-open <=> shell.guide-open;
+    in-out property <bool> guide-touring <=> shell.guide-touring;
+
+    callback hide-to-tray;
+    callback transport-changed;
+    callback import-files(bool);
+    callback import-playlist;
+    callback prune-missing;
+    callback rail-changed(bool);
+    callback play-track(int);
+    callback favorite-track(int);
+    callback remove-track(int);
+    callback add-to-playlist(int, int);
+    callback remove-from-playlist(int);
+    callback filter-changed(int, string);
+    callback sort-changed(int);
+    callback page-changed(int);
+    callback create-playlist(string);
+    callback delete-playlist;
+    callback toggle-play;
+    callback stop-play;
+    callback next-track(int);
+    callback seek(float);
+    callback volume-changed(float);
+    callback shuffle-changed(bool);
+    callback repeat-changed(int);
+    callback glass-changed(bool);
+    callback power-changed(bool);
+    callback theme-changed(int);
+    callback choose-downloader;
+    callback choose-download-folder;
+    callback start-download(string, bool);
+    callback cancel-download;
+    callback open-link(string);
+    callback open-settings;
+    callback theme-hint-dismissed;
+    callback guide-done;
+
+    changed current-id => { root.transport-changed(); }
+    changed playing => { root.transport-changed(); }
+    changed position => { root.transport-changed(); }
+    changed glass => { Theme.glass = root.glass; }
+    changed reduce-motion => { Theme.reduce-motion = root.reduce-motion; }
+
+    shell := AppShell {
+        viewport-width: root.viewport-width;
+        viewport-height: root.viewport-height;
+        hide-to-tray => { root.hide-to-tray(); }
+        import-files(folder) => { root.import-files(folder); }
+        import-playlist => { root.import-playlist(); }
+        prune-missing => { root.prune-missing(); }
+        rail-changed(collapsed) => { root.rail-changed(collapsed); }
+        play-track(id) => { root.play-track(id); }
+        favorite-track(id) => { root.favorite-track(id); }
+        remove-track(id) => { root.remove-track(id); }
+        add-to-playlist(id, index) => { root.add-to-playlist(id, index); }
+        remove-from-playlist(id) => { root.remove-from-playlist(id); }
+        filter-changed(index, text) => { root.filter-changed(index, text); }
+        sort-changed(order) => { root.sort-changed(order); }
+        page-changed(page) => { root.page-changed(page); }
+        create-playlist(name) => { root.create-playlist(name); }
+        delete-playlist => { root.delete-playlist(); }
+        toggle-play => { root.toggle-play(); }
+        stop-play => { root.stop-play(); }
+        next-track(direction) => { root.next-track(direction); }
+        seek(value) => { root.seek(value); }
+        volume-changed(value) => { root.volume-changed(value); }
+        shuffle-changed(value) => { root.shuffle-changed(value); }
+        repeat-changed(value) => { root.repeat-changed(value); }
+        glass-changed(value) => { root.glass-changed(value); }
+        power-changed(value) => { root.power-changed(value); }
+        theme-changed(value) => { root.theme-changed(value); }
+        choose-downloader => { root.choose-downloader(); }
+        choose-download-folder => { root.choose-download-folder(); }
+        start-download(url, mp3) => { root.start-download(url, mp3); }
+        cancel-download => { root.cancel-download(); }
+        open-link(url) => { root.open-link(url); }
+        open-settings => { root.open-settings(); }
+        theme-hint-dismissed => { root.theme-hint-dismissed(); }
+        guide-done => { root.guide-done(); }
+    }
+}
+
+// Shown only after the event loop has unwound, which is why it lives in this
+// file rather than inside AppWindow: a Window cannot be nested in one, and the
+// point of this one is that the previous window is already gone.
+export component CrashWindow inherits Window {
+    title: "Monolith stopped unexpectedly";
+    icon: @image-url("../assets/monolith-mark.png");
+    preferred-width: 620px;
+    preferred-height: 460px;
+    min-width: 460px;
+    min-height: 380px;
+    background: Theme.canvas;
+    default-font-family: "Segoe UI Variable";
+    default-font-size: 14px;
+
+    in property <string> summary;
+    in property <string> details;
+    // Filled in by Rust. The dialog never builds a URL itself, so there is one
+    // place that decides where a report goes.
+    in property <string> issue-url;
+    callback open-issue(string);
+    callback dismissed;
+
+    // The only child of the Window, for the same reason AppWindow has one: a
+    // second child takes the fill and leaves this with no size.
+    VerticalLayout {
+        padding: 28px;
+        spacing: 18px;
+
+        Text {
+            text: "Monolith stopped unexpectedly";
+            color: Theme.foreground;
+            font-size: Theme.type-display;
+            font-weight: 700;
+        }
+        Text {
+            text: "Your music and settings are untouched. A copy of this was written to the crash log beside the app.";
+            color: Theme.secondary;
+            font-size: Theme.type-body;
+            wrap: word-wrap;
+        }
+
+        // The report panel clips rather than scrolls. A Flickable sized from
+        // its content's preferred height fought the enclosing layout and left
+        // the whole dialog blank, and a crash report that is simply clipped at
+        // the window edge is a far smaller problem than an empty window. The
+        // full text is always in the log and in the prefilled issue.
+        Rectangle {
+            horizontal-stretch: 1;
+            border-radius: Theme.radius-panel;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
+            clip: true;
+            VerticalLayout {
+                x: 16px;
+                y: 14px;
+                width: parent.width - 32px;
+                height: parent.height - 28px;
+                spacing: 10px;
+                Text {
+                    text: root.summary;
+                    color: Theme.danger;
+                    font-size: Theme.type-body;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                    vertical-stretch: 0;
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border;
+                    vertical-stretch: 0;
+                }
+                Text {
+                    text: root.details;
+                    color: Theme.secondary;
+                    font-size: Theme.type-caption;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 0;
+            spacing: 8px;
+            Button {
+                kind: ButtonKind.primary;
+                text: "Report this on GitHub";
+                accessible-label: "Open a prefilled issue in your default browser";
+                clicked => { root.open-issue(root.issue-url); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                kind: ButtonKind.ghost;
+                text: "Close";
+                clicked => { root.dismissed(); }
+            }
+        }
+    }
+}
