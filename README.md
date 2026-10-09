@@ -28,7 +28,9 @@ live locally in SQLite. No account, cloud sync, or telemetry service.
 | ![Downloads with aligned status and audio format controls](docs/img/downloads.png) | ![Monolith Windows setup wizard](docs/img/installer.png) |
 
 <details>
-<summary><strong>Compact windows and light appearance</strong></summary>
+<summary><strong>Search, compact windows and light appearance</strong></summary>
+
+<img src="docs/img/search.png" width="1000" alt="Search results with local artwork thumbnails and a circular magnifier navigation icon">
 
 | Compact navigation | Light appearance |
 | --- | --- |
@@ -47,7 +49,7 @@ are not evidence of audio playback. Linux appearance has not been captured yet.
 | **Automatic imports** | New audio in Music/Monolith and your selected save folder appears while the app is open. Nested folders work too. |
 | **Library and playlists** | Favorites, custom playlists, and M3U/PLS imports. Removing a library entry leaves the original file alone. |
 | **Songs and search** | Sort by title, artist, album or added order. Local search responds after a short typing debounce. |
-| **Playback** | Seek, volume, shuffle and repeat, plus a compact bar and expanded player. |
+| **Playback** | Song artwork in track rows, hover/focus play controls, seek, volume, shuffle and repeat, plus a compact bar and expanded player. |
 | **Downloads** | Explicit transfers through a user-selected yt-dlp executable. Real progress, cancellation and history; tools are not bundled. |
 | **Appearance** | Dark, light and system modes, animated icons, visible keyboard focus and adaptive navigation. Windows motion preference is respected. |
 | **Windows integration** | Media controls, tray support, optional acrylic, and a per-user installer. |
@@ -123,7 +125,9 @@ flowchart TB
 
 Filesystem work and metadata parsing run off the UI thread. Transfers use argument
 arrays, bounded output handling, staging files and collision-safe publication.
-Artwork decoding and caching are bounded. The Linux build uses desktop portal file
+Track thumbnails use embedded artwork or a matching local JPG/PNG/WebP sidecar;
+files without artwork show a music-note tile. Thumbnails are loaded on demand
+and capped at 128 small decoded covers. Artwork decoding and caching are bounded. The Linux build uses desktop portal file
 dialogs; Windows integration is conditionally compiled.
 
 ## Build and check

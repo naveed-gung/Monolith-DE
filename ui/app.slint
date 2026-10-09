@@ -91,6 +91,7 @@ export component AppWindow inherits Window {
     callback import-playlist;
     callback prune-missing;
     callback rail-changed(bool);
+    callback request-thumbnail(int);
     callback play-track(int);
     callback favorite-track(int);
     callback remove-track(int);
@@ -134,6 +135,7 @@ export component AppWindow inherits Window {
         import-playlist => { root.import-playlist(); }
         prune-missing => { root.prune-missing(); }
         rail-changed(collapsed) => { root.rail-changed(collapsed); }
+        request-thumbnail(id) => { root.request-thumbnail(id); }
         play-track(id) => { root.play-track(id); }
         favorite-track(id) => { root.favorite-track(id); }
         remove-track(id) => { root.remove-track(id); }

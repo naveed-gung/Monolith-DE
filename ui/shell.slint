@@ -74,6 +74,7 @@ export component AppShell inherits Rectangle {
     callback import-playlist;
     callback prune-missing;
     callback rail-changed(bool);
+    callback request-thumbnail(int);
     callback play-track(int);
     callback favorite-track(int);
     callback remove-track(int);
@@ -393,7 +394,8 @@ export component AppShell inherits Rectangle {
                                 sort-changed(order) => { root.sort-changed(order); }
                                 create-playlist(name) => { root.create-playlist(name); }
                                 delete-playlist => { root.delete-playlist(); }
-                                play-track(id) => { root.play-track(id); }
+                                request-thumbnail(id) => { root.request-thumbnail(id); }
+        play-track(id) => { root.play-track(id); }
                                 toggle-play => { root.toggle-play(); }
                                 favorite-track(id) => { root.favorite-track(id); }
                                 remove-track(id) => { root.remove-track(id); }

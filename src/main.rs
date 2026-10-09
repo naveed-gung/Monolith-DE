@@ -204,6 +204,7 @@ fn run() -> Result<()> {
     bind!(on_seek, Seek, f32);
     bind!(on_volume_changed, Volume, f32);
     bind!(on_play_track, Play, i64);
+    bind!(on_request_thumbnail, Thumbnail, i64);
     bind!(on_favorite_track, Favorite, i64);
     bind!(on_remove_track, Remove, i64);
     bind!(on_remove_from_playlist, RemoveFromPlaylist, i64);

@@ -4,7 +4,7 @@ use monolith_desktop::{
     transfer,
 };
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
-use slint::{ModelRc, VecModel};
+use slint::{Model, ModelRc, VecModel};
 use std::{
     hash::BuildHasher,
     path::PathBuf,
@@ -28,6 +28,7 @@ pub enum Command {
     /// 0 title, 1 artist, 2 album, 3 recently added.
     Sort(i32),
     Play(i64),
+    Thumbnail(i64),
     Toggle,
     Resume,
     Pause,
@@ -79,6 +80,7 @@ struct Worker {
     /// Decoded artwork, keyed by track id, most-recently-used last.
     art: std::collections::HashMap<i64, (Art, Art)>,
     art_order: std::collections::VecDeque<i64>,
+    thumbnails: std::collections::VecDeque<(i64, Option<Art>)>,
     queue: Vec<i64>,
     current: Option<i64>,
     position: f64,
@@ -94,10 +96,55 @@ struct Worker {
 const ART_CACHE_LIMIT: usize = 8;
 
 impl Worker {
+    /// Virtualized rows request 64px covers as they appear. Cache both hits and
+    /// misses; evict UI buffers too, so scrolling cannot accumulate decoded art.
+    fn thumbnail(&mut self, id: i64) {
+        if !self.visible.contains(&id) {
+            return;
+        }
+        let cached = self
+            .thumbnails
+            .iter()
+            .position(|(key, _)| *key == id)
+            .and_then(|index| self.thumbnails.remove(index));
+        let art = cached.map(|(_, art)| art).unwrap_or_else(|| {
+            let track = self.all.iter().find(|track| track.id == id)?;
+            row_cover(&track.path)
+        });
+        self.thumbnails.push_back((id, art.clone()));
+        let evicted = if self.thumbnails.len() > 128 {
+            self.thumbnails.pop_front().map(|(key, _)| key)
+        } else {
+            None
+        };
+        update(&self.ui, move |ui| {
+            let rows = ui.get_tracks();
+            for index in 0..rows.row_count() {
+                let Some(mut row) = rows.row_data(index) else {
+                    continue;
+                };
+                if Some(row.id as i64) == evicted {
+                    row.thumbnail = slint::Image::default();
+                    rows.set_row_data(index, row);
+                } else if row.id as i64 == id {
+                    row.thumbnail = art
+                        .as_ref()
+                        .map(|art| {
+                            slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
+                                &art.bytes, art.width, art.height,
+                            ))
+                        })
+                        .unwrap_or_default();
+                    rows.set_row_data(index, row);
+                }
+            }
+        });
+    }
     /// Reloads library rows and playlist metadata from disk. Everything else
     /// filters from the in-memory copy.
     fn reload(&mut self) -> Result<()> {
         self.all = self.db.tracks(0)?;
+        self.thumbnails.clear();
         self.playlists = self.db.playlists()?;
         self.members.clear();
         for (id, _) in &self.playlists {
@@ -203,6 +250,7 @@ impl Worker {
                         detail: format!("{} · {}", t.artist, t.album).into(),
                         duration: library::clock(t.seconds).into(),
                         favorite: t.favorite,
+                        ..Default::default()
                     })
                     .collect::<Vec<_>>(),
             )));
@@ -495,6 +543,7 @@ impl Worker {
                     self.apply_filter()?;
                 }
             }
+            Command::Thumbnail(id) => self.thumbnail(id),
             Command::Play(id) => {
                 self.queue = self.visible.clone();
                 if self.shuffle {
@@ -716,6 +765,7 @@ pub fn spawn(
             filter_due: None,
             art: std::collections::HashMap::new(),
             art_order: std::collections::VecDeque::new(),
+            thumbnails: std::collections::VecDeque::new(),
             queue,
             current,
             position,
@@ -995,7 +1045,7 @@ fn rounded_alpha(image: &mut image::RgbaImage, radius: u32) {
 const BAR_RADIUS_RATIO: f32 = 10.0 / 52.0;
 const EXPANDED_RADIUS_RATIO: f32 = 12.0 / 370.0;
 
-fn cover(path: &str) -> Option<(Art, Art)> {
+fn decode_cover(path: &str) -> Option<image::RgbaImage> {
     use lofty::file::TaggedFileExt;
     const MAX_ART_BYTES: usize = 8 * 1024 * 1024;
     let source = std::path::Path::new(path);
@@ -1009,7 +1059,13 @@ fn cover(path: &str) -> Option<(Art, Art)> {
         // the file itself carries no embedded artwork.
         _ => {
             let image = library::sidecar_image(source)?;
-            let data = std::fs::read(image).ok()?;
+            use std::io::Read;
+            let mut data = Vec::new();
+            std::fs::File::open(image)
+                .ok()?
+                .take((MAX_ART_BYTES + 1) as u64)
+                .read_to_end(&mut data)
+                .ok()?;
             if data.len() > MAX_ART_BYTES {
                 return None;
             }
@@ -1028,7 +1084,33 @@ fn cover(path: &str) -> Option<(Art, Art)> {
     limits.max_image_height = Some(1600);
     limits.max_alloc = Some(20 * 1024 * 1024);
     reader.limits(limits);
-    let decoded = reader.decode().ok()?.thumbnail(384, 384).into_rgba8();
+    Some(reader.decode().ok()?.into_rgba8())
+}
+
+fn row_cover(path: &str) -> Option<Art> {
+    let decoded = decode_cover(path)?;
+    let span = decoded.width().min(decoded.height());
+    let square = image::imageops::crop_imm(
+        &decoded,
+        (decoded.width() - span) / 2,
+        (decoded.height() - span) / 2,
+        span,
+        span,
+    );
+    let mut tile = image::imageops::resize(
+        &square.to_image(),
+        64,
+        64,
+        image::imageops::FilterType::Triangle,
+    );
+    rounded_alpha(&mut tile, 11);
+    Some(Art::from(tile))
+}
+
+fn cover(path: &str) -> Option<(Art, Art)> {
+    let decoded = image::DynamicImage::ImageRgba8(decode_cover(path)?)
+        .thumbnail(384, 384)
+        .into_rgba8();
     let span = decoded.width().min(decoded.height());
     let mut bar = decoded.clone();
     rounded_alpha(&mut bar, (span as f32 * BAR_RADIUS_RATIO).round() as u32);
@@ -1043,6 +1125,44 @@ fn cover(path: &str) -> Option<(Art, Art)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row_cover_bounds_sidecars_and_handles_missing_or_bad_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio = dir.path().join("track.wav");
+        let path = audio.to_str().unwrap();
+        assert!(row_cover(path).is_none());
+        let sidecar = audio.with_extension("png");
+        let mut picture = image::RgbaImage::from_pixel(160, 80, image::Rgba([0, 0, 255, 255]));
+        for y in 0..80 {
+            for x in 40..120 {
+                picture.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+            }
+        }
+        picture.save(&sidecar).unwrap();
+        let tile = row_cover(path).unwrap();
+        assert_eq!(
+            (tile.width, tile.height, tile.bytes.len()),
+            (64, 64, 64 * 64 * 4)
+        );
+        assert_eq!(tile.bytes[3], 0, "rounded corner");
+        let center = (32 * 64 + 32) * 4;
+        assert_eq!(
+            &tile.bytes[center..center + 4],
+            &[255, 0, 0, 255],
+            "center crop"
+        );
+        std::fs::write(&sidecar, b"not an image").unwrap();
+        assert!(row_cover(path).is_none());
+        std::fs::File::create(&sidecar)
+            .unwrap()
+            .set_len(8 * 1024 * 1024 + 1)
+            .unwrap();
+        assert!(
+            row_cover(path).is_none(),
+            "oversized sidecar must be rejected"
+        );
+    }
 
     /// Guards the "rounded corners" requirement. Slint only clips to
     /// rectangular bounds, so a regression here silently renders square

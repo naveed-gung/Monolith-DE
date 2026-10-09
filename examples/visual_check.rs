@@ -77,6 +77,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 detail: format!("Artist {id} · Album {}", (id + 2) / 3).into(),
                 duration: format!("{}:{:02}", 2 + id % 3, (id * 7) % 60).into(),
                 favorite: id % 4 == 0,
+                thumbnail: if id % 3 == 0 {
+                    slint::Image::default()
+                } else {
+                    // Synthetic cover swatches; never presented as fetched artwork.
+                    let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(64, 64);
+                    for (i, pixel) in pixels.make_mut_slice().iter_mut().enumerate() {
+                        let x = i % 64;
+                        let y = i / 64;
+                        let dx = (10.5 - x.min(63 - x) as f32).max(0.);
+                        let dy = (10.5 - y.min(63 - y) as f32).max(0.);
+                        let alpha = ((11. - (dx * dx + dy * dy).sqrt()).clamp(0., 1.) * 255.) as u8;
+                        *pixel = slint::Rgba8Pixel::new(
+                            (70 + id * 12) as u8,
+                            (45 + y) as u8,
+                            (100 + x) as u8,
+                            alpha,
+                        );
+                    }
+                    slint::Image::from_rgba8(pixels)
+                },
             })
             .collect();
         ui.set_tracks(ModelRc::from(Rc::new(VecModel::from(rows))));

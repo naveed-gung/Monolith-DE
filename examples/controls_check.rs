@@ -36,7 +36,7 @@ fn capture(ui: &ControlsReview, output: &str) {
         );
     }
     for phase in 0..5 {
-        let index = (193 * 560 + 70 + phase * 101) * 4;
+        let index = (193 * 560 + 73 + phase * 100) * 4;
         let rgba = &pixels.as_bytes()[index..index + 4];
         assert!(
             rgba[0] as u16 > rgba[1] as u16 + 50,

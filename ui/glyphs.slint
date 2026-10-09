@@ -24,23 +24,21 @@ component GlyphBox inherits Rectangle {
     // SVG outlines without the scaling artefacts.
     private property <float> unit: root.width / 24px;
 
-    // ---- 0: Library. A stack that rights itself. -------------------------
+    // Library: upright album spines, retaining their silhouette during motion.
     if root.kind == 0: Rectangle {
-        x: (3px * root.unit);
-        y: (6px * root.unit);
-        width: (18px * root.unit);
-        height: (12px * root.unit);
-        // Books square up through width and position, supported by both renderers.
-
-        for row[index] in 3: Rectangle {
-            x: (0px * root.unit);
-            // The stack tightens as it rights: the outer books close in.
-            y: (1px * root.unit) + index * (4px * root.unit) + (index == 1 ? -(1px * root.unit) * (1 - root.active) : (0px * root.unit));
-            width: (18px * root.unit) - index * (2px * root.unit) * (1 - root.active);
-            height: (2.5px * root.unit);
-            border-radius: (1.25px * root.unit);
-            background: root.tint;
-            opacity: index == 1 ? 1 : 0.72;
+        for spine[index] in 3: Rectangle {
+            x: (4px + index * 6px) * root.unit;
+            y: (5px - root.active * (index == 1 ? 1px : 0px)) * root.unit;
+            width: 4px * root.unit;
+            height: (15px + root.active * (index == 1 ? 2px : 0px)) * root.unit;
+            border-width: 1.6px * root.unit;
+            border-radius: 1px * root.unit;
+            border-color: root.tint;
+            Rectangle {
+                x: 1px * root.unit; y: 4px * root.unit;
+                width: 2px * root.unit; height: 1.4px * root.unit;
+                background: root.tint;
+            }
         }
     }
 
@@ -81,33 +79,22 @@ component GlyphBox inherits Rectangle {
         Rectangle { x: (13.5px * root.unit); y: (17px * root.unit) - (13.6px * root.unit) * root.active; width: (3px * root.unit); height: (13.6px * root.unit) * root.active; border-radius: (1.5px * root.unit); background: root.tint; }
     }
 
-    // ---- 2: Search. The lens widens into a pill. -------------------------
+    // Search stays a circular magnifying glass. Lens and handle move together.
     if root.kind == 2: Rectangle {
-        x: (3px * root.unit);
-        y: (3px * root.unit);
-        width: (18px * root.unit);
-        height: (18px * root.unit);
-        // The lens circle stretches sideways; the radius tracks the height so
-        // it stays a true stadium instead of an ellipse.
-        Rectangle {
-            x: (1px * root.unit);
-            y: (4px * root.unit);
-            width: (10px * root.unit) + (6px * root.unit) * root.active;
-            height: (10px * root.unit);
-            border-radius: (5px * root.unit);
-            border-width: (2px * root.unit);
-            border-color: root.tint;
-            background: transparent;
-        }
+        x: (3px - root.active * 0.5px) * root.unit;
+        y: (3px - root.active * 0.5px) * root.unit;
+        width: (12px + root.active * 1px) * root.unit;
+        height: self.width;
+        border-radius: self.width / 2;
+        border-width: 1.8px * root.unit;
+        border-color: root.tint;
     }
     if root.kind == 2: Path {
-        x: 4px * root.unit * root.active;
-        y: 0px;
         width: root.width; height: root.height;
         viewbox-width: 24; viewbox-height: 24;
         stroke: root.tint; stroke-width: 1.8px;
-        MoveTo { x: 12; y: 15; }
-        LineTo { x: 18; y: 21; }
+        MoveTo { x: 13.3; y: 13.3; }
+        LineTo { x: 20; y: 20; }
     }
 
     // Arrow coordinates move directly; rotation is unsupported by the software

@@ -7,7 +7,8 @@ export struct TrackRow {
     title: string,
     detail: string,
     duration: string,
-    favorite: bool
+    favorite: bool,
+    thumbnail: image
 }
 
 component TrackItem inherits Rectangle {
@@ -17,6 +18,10 @@ component TrackItem inherits Rectangle {
     in property <bool> compact;
     in property <bool> custom-list;
     in property <bool> can-add;
+    callback request-thumbnail(int);
+    private property <int> art-id: root.track.id;
+    init => { root.request-thumbnail(root.art-id); }
+    changed art-id => { root.request-thumbnail(root.art-id); }
     callback play;
     callback activate;
     callback toggle-favorite;
@@ -69,14 +74,42 @@ component TrackItem inherits Rectangle {
         HorizontalLayout {
             padding-left: 8px;
             padding-right: 6px;
-            spacing: 3px;
+            spacing: 8px;
             cross-axis-alignment: center;
-            IconButton {
-                size: 40px;
-                icon: root.current && root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg");
-                active: root.current;
-                label: (root.current && root.playing ? "Pause " : "Play ") + root.track.title;
-                clicked => { root.play(); }
+            Rectangle {
+                width: 40px; height: 40px;
+                border-radius: 7px;
+                background: Theme.raised;
+                private property <bool> reveal: root.hot || root.focus-visible || art-focus.has-focus || art-touch.has-hover || (root.current && root.playing);
+                accessible-role: button;
+                accessible-label: (root.current && root.playing ? "Pause " : "Play ") + root.track.title;
+                accessible-action-default => { root.play(); }
+                forward-focus: art-focus;
+                Image { width: parent.width; height: parent.height; source: root.track.thumbnail; }
+                if root.track.thumbnail.width == 0: Image {
+                    x: 10px; y: 10px; width: 20px; height: 20px;
+                    source: @image-url("icons/music.svg"); colorize: Theme.muted;
+                }
+                Rectangle {
+                    width: parent.width; height: parent.height; border-radius: 7px;
+                    background: #00000099;
+                    opacity: parent.reveal ? 1 : 0;
+                    animate opacity { duration: Theme.fast; }
+                    Image {
+                        x: 10px; y: 10px; width: 20px; height: 20px;
+                        source: root.current && root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg");
+                        colorize: #FFFFFF;
+                    }
+                }
+                Rectangle { border-radius: 7px; border-width: art-focus.has-focus ? 2px : 1px; border-color: art-focus.has-focus ? Theme.accent : Theme.border; }
+                art-touch := TouchArea { mouse-cursor: pointer; clicked => { art-focus.focus(); root.play(); } }
+                art-focus := FocusScope {
+                    width: 0px;
+                    key-pressed(event) => {
+                        if event.text == " " || event.text == "\n" { root.play(); return accept; }
+                        return reject;
+                    }
+                }
             }
             VerticalLayout {
                 spacing: 1px;
@@ -218,6 +251,7 @@ export component LibraryPage inherits Rectangle {
     callback filter-changed(int, string);
     callback create-playlist(string);
     callback delete-playlist;
+    callback request-thumbnail(int);
     callback play-track(int);
     callback toggle-play;
     callback favorite-track(int);
@@ -457,6 +491,7 @@ export component LibraryPage inherits Rectangle {
             horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
             for track in root.tracks: TrackItem {
                 track: track;
+                request-thumbnail(id) => { root.request-thumbnail(id); }
                 current: root.current-id == track.id;
                 playing: root.playing;
                 compact: root.compact || root.short;

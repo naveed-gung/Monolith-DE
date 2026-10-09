@@ -48,6 +48,12 @@ fn main() -> Result<()> {
         Arc::new(AtomicBool::new(false)),
     );
     tx.send(Command::Import(vec![path.clone(), path.clone()]))?;
+    image::RgbaImage::from_pixel(120, 80, image::Rgba([210, 95, 70, 255]))
+        .save(path.with_extension("png"))?;
+    let thumbnails = tx.clone();
+    app.on_request_thumbnail(move |id| {
+        let _ = thumbnails.send(Command::Thumbnail(id as i64));
+    });
     app.show()?;
     let phase = Rc::new(Cell::new(0));
     let tick = phase.clone();
@@ -72,7 +78,12 @@ fn main() -> Result<()> {
                 ui.get_status()
             );
             match tick.get() {
-                0 if ui.get_total_tracks() == 1 => {
+                0 if ui.get_total_tracks() == 1
+                    && ui
+                        .get_tracks()
+                        .row_data(0)
+                        .is_some_and(|row| row.thumbnail.size().width == 64) =>
+                {
                     assert_eq!(ui.get_tracks().row_count(), 1);
                     let id = ui.get_tracks().row_data(0).unwrap().id;
                     sender.send(Command::Play(id as i64)).unwrap();
@@ -168,7 +179,7 @@ fn main() -> Result<()> {
     // All playback file handles must have been released at stop/shutdown.
     std::fs::rename(&path, dir.path().join("released.wav"))?;
     println!(
-        "PASS: duplicate import, metadata, play/pause/resume/seek/stop, volume, favorite, playlist, search, next/end/repeat, persistence, file release."
+        "PASS: row artwork from sidecar, duplicate import, metadata, play/pause/resume/seek/stop, volume, favorite, playlist, search, next/end/repeat, persistence, file release."
     );
     Ok(())
 }
