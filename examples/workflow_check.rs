@@ -49,7 +49,7 @@ fn main() -> Result<()> {
     );
     tx.send(Command::Import(vec![path.clone(), path.clone()]))?;
     image::RgbaImage::from_pixel(120, 80, image::Rgba([210, 95, 70, 255]))
-        .save(path.with_extension("png"))?;
+        .save(path.with_extension("webp"))?;
     let thumbnails = tx.clone();
     app.on_request_thumbnail(move |id| {
         let _ = thumbnails.send(Command::Thumbnail(id as i64));

@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { NavGlyph } from "glyphs.slint";
 import { ListView } from "std-widgets.slint";
 import { Button, ButtonKind, IconButton, TextField, Chip, StatusBar, SectionLabel, Caption } from "controls.slint";
 
@@ -22,7 +23,6 @@ component TrackItem inherits Rectangle {
     private property <int> art-id: root.track.id;
     init => { root.request-thumbnail(root.art-id); }
     changed art-id => { root.request-thumbnail(root.art-id); }
-    callback play;
     callback activate;
     callback toggle-favorite;
     callback collect;
@@ -45,11 +45,6 @@ component TrackItem inherits Rectangle {
         border-width: root.focus-visible ? 2px : 0px;
         border-color: Theme.accent;
         animate background { duration: Theme.fast; }
-        // The per-row buttons are declared after this area, so they keep
-        // receiving their own clicks and only the bare row plays.
-        touch := TouchArea {
-            clicked => { root.activate(); }
-        }
         focus := FocusScope {
             width: 0px;
             focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
@@ -80,15 +75,14 @@ component TrackItem inherits Rectangle {
                 width: 40px; height: 40px;
                 border-radius: 7px;
                 background: Theme.raised;
-                private property <bool> reveal: root.hot || root.focus-visible || art-focus.has-focus || art-touch.has-hover || (root.current && root.playing);
-                accessible-role: button;
-                accessible-label: (root.current && root.playing ? "Pause " : "Play ") + root.track.title;
-                accessible-action-default => { root.play(); }
-                forward-focus: art-focus;
+                private property <bool> reveal: root.hot || root.focus-visible || (root.current && root.playing);
+                accessible-role: none;
                 Image { width: parent.width; height: parent.height; source: root.track.thumbnail; }
-                if root.track.thumbnail.width == 0: Image {
+                if root.track.thumbnail.width == 0: NavGlyph {
                     x: 10px; y: 10px; width: 20px; height: 20px;
-                    source: @image-url("icons/music.svg"); colorize: Theme.muted;
+                    kind: 1; tint: Theme.muted;
+                    opacity: parent.reveal ? 0 : 1;
+                    animate opacity { duration: Theme.fast; }
                 }
                 Rectangle {
                     width: parent.width; height: parent.height; border-radius: 7px;
@@ -101,15 +95,7 @@ component TrackItem inherits Rectangle {
                         colorize: #FFFFFF;
                     }
                 }
-                Rectangle { border-radius: 7px; border-width: art-focus.has-focus ? 2px : 1px; border-color: art-focus.has-focus ? Theme.accent : Theme.border; }
-                art-touch := TouchArea { mouse-cursor: pointer; clicked => { art-focus.focus(); root.play(); } }
-                art-focus := FocusScope {
-                    width: 0px;
-                    key-pressed(event) => {
-                        if event.text == " " || event.text == "\n" { root.play(); return accept; }
-                        return reject;
-                    }
-                }
+                Rectangle { border-radius: 7px; border-width: 1px; border-color: Theme.border; }
             }
             VerticalLayout {
                 spacing: 1px;
@@ -150,6 +136,14 @@ component TrackItem inherits Rectangle {
                 label: "Remove from library; keep original file";
                 clicked => { root.remove(); }
             }
+        }
+        // Foreground hit area includes artwork, title, detail, duration and gaps.
+        // The three 40px actions and their spacing keep independent hit targets.
+        touch := TouchArea {
+            x: 0px; y: 0px;
+            width: max(0px, parent.width - 142px);
+            mouse-cursor: pointer;
+            clicked => { focus.focus(); root.activate(); }
         }
     }
 }
@@ -497,11 +491,10 @@ export component LibraryPage inherits Rectangle {
                 compact: root.compact || root.short;
                 custom-list: root.playlist-index > 1;
                 can-add: root.playlists.length > 2;
-                play => {
+                activate => {
                     if root.current-id == track.id { root.toggle-play(); }
                     else { root.play-track(track.id); }
                 }
-                activate => { root.play-track(track.id); }
                 toggle-favorite => { root.favorite-track(track.id); }
                 collect => {
                     if root.playlist-index > 1 {

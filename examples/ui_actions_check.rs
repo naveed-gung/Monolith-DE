@@ -30,23 +30,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_tracks(ModelRc::from(Rc::new(VecModel::from(vec![
         TrackRow {
             id: 1,
-            title: "Current track".into(),
+            title: "Current track with a deliberately long title for pointer checks".into(),
+            detail: "Current artist and album for subtitle pointer checks".into(),
+            duration: "3:20".into(),
             ..Default::default()
         },
         TrackRow {
             id: 2,
-            title: "Next track".into(),
+            title: "Next track with a deliberately long title for pointer checks".into(),
+            detail: "Next artist and album".into(),
+            duration: "4:00".into(),
             ..Default::default()
         },
     ]))));
     let toggles = Rc::new(Cell::new(0));
     let played = Rc::new(Cell::new(-1));
+    let favorites = Rc::new(Cell::new(0));
+    let removals = Rc::new(Cell::new(0));
     let downloads = Rc::new(Cell::new(0));
     let cancelled = Rc::new(Cell::new(0));
     let count = toggles.clone();
     ui.on_toggle_play(move || count.set(count.get() + 1));
     let id = played.clone();
     ui.on_play_track(move |track| id.set(track));
+    let count = favorites.clone();
+    ui.on_favorite_track(move |id| {
+        assert_eq!(id, 1);
+        count.set(count.get() + 1);
+    });
+    let count = removals.clone();
+    ui.on_remove_track(move |id| {
+        assert_eq!(id, 1);
+        count.set(count.get() + 1);
+    });
     let count = downloads.clone();
     ui.on_start_download(move |url, mp3| {
         assert_eq!(url, "https://youtu.be/test");
@@ -70,6 +86,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(toggles.get(), 2, "focused row transport supports Space");
         click(&ui, 284., 286.);
         assert_eq!(played.get(), 2, "another row selects its track");
+        // Click the title, subtitle, whitespace and duration, not just the tile.
+        for (x, y) in [(450., 226.), (450., 244.), (850., 234.), (1080., 234.)] {
+            let before = toggles.get();
+            click(&ui, x, y);
+            assert_eq!(toggles.get(), before + 1, "row body at {x},{y}");
+        }
+        click(&ui, 450., 278.);
+        assert_eq!(played.get(), 2, "song title chooses the track");
+        let before = toggles.get();
+        click(&ui, 1134., 234.); // Favorite, beyond the playback hit area.
+        click(&ui, 1182., 234.); // Disabled collection action.
+        click(&ui, 1230., 234.); // Remove action.
+        assert_eq!(toggles.get(), before, "row actions never toggle playback");
+        assert_eq!(favorites.get(), 1, "favorite owns its click");
+        assert_eq!(removals.get(), 1, "remove owns its click");
+        click(&ui, 46., 776.);
+        assert!(ui.get_player_open(), "artwork opens the expanded player");
+        ui.set_player_open(false);
         ui.set_selected_page(3);
         let ui = ui.clone_strong();
         slint::Timer::single_shot(Duration::from_millis(100), move || {
@@ -84,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             assert_eq!(cancelled.get(), 1, "active download offers cancellation");
             assert_eq!(downloads.get(), 1, "active job cannot submit twice");
             println!(
-                "PASS: current-row pause, track selection, empty URL guard, download and cancel callbacks; no network."
+                "PASS: whole-row title/detail/gap/duration playback, separate row actions, keyboard pause, empty URL guard, download and cancel callbacks; no network."
             );
             slint::quit_event_loop().unwrap();
         });

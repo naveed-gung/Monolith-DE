@@ -36,6 +36,8 @@ live locally in SQLite. No account, cloud sync, or telemetry service.
 | --- | --- |
 | <img src="docs/img/compact.png" width="420" alt="Compact Monolith window with all five navigation items"> | <img src="docs/img/light.png" width="640" alt="Monolith library in light appearance"> |
 
+<img src="docs/img/player.png" width="1000" alt="Expanded player showing real local WebP fixture artwork and left-to-right playback progress">
+
 </details>
 
 These are captures of the rendered Windows interface. Populated screenshots use
@@ -49,10 +51,10 @@ are not evidence of audio playback. Linux appearance has not been captured yet.
 | **Automatic imports** | New audio in Music/Monolith and your selected save folder appears while the app is open. Nested folders work too. |
 | **Library and playlists** | Favorites, custom playlists, and M3U/PLS imports. Removing a library entry leaves the original file alone. |
 | **Songs and search** | Sort by title, artist, album or added order. Local search responds after a short typing debounce. |
-| **Playback** | Song artwork in track rows, hover/focus play controls, seek, volume, shuffle and repeat, plus a compact bar and expanded player. |
+| **Playback** | Click a song's artwork, title, details or row to play/pause. Favorites and playlist actions stay separate. Local covers, seek, volume, shuffle and repeat work in the compact bar and expanded player. |
 | **Downloads** | Explicit transfers through a user-selected yt-dlp executable. Real progress, cancellation and history; tools are not bundled. |
 | **Appearance** | Dark, light and system modes, animated icons, visible keyboard focus and adaptive navigation. Windows motion preference is respected. |
-| **Windows integration** | Media controls, tray support, optional acrylic, and a per-user installer. |
+| **Windows integration** | Media controls, tray support that preserves your player and window size, optional acrylic, and a per-user installer. |
 
 ### Drop a file in. Keep listening.
 
@@ -125,8 +127,9 @@ flowchart TB
 
 Filesystem work and metadata parsing run off the UI thread. Transfers use argument
 arrays, bounded output handling, staging files and collision-safe publication.
-Track thumbnails use embedded artwork or a matching local JPG/PNG/WebP sidecar;
-files without artwork show a music-note tile. Thumbnails are loaded on demand
+Track thumbnails use the first valid embedded picture across the file's tags,
+or a matching local JPG/JPEG/PNG/WebP sidecar. Artwork stays local; missing files
+or missing covers show a music-note tile. Thumbnails are loaded on demand
 and capped at 128 small decoded covers. Artwork decoding and caching are bounded. The Linux build uses desktop portal file
 dialogs; Windows integration is conditionally compiled.
 
@@ -138,7 +141,7 @@ listed in its [packaging guide](packaging/linux/README.md).
 
 ```sh
 cargo build --release --locked --bin monolith-desktop
-cargo test --release --locked --lib
+cargo test --release --locked --lib --bin monolith-desktop
 cargo run --release --locked --example workflow_check
 cargo run --release --locked --example transfer_check
 cargo run --release --locked --example visual_check -- shot.ppm 1280 820 0 check
@@ -166,12 +169,19 @@ Rust build caches are much larger than the shipped application. `target/` and
 release packages before cleaning caches; dependency sources remain in Cargo's
 separate cache.
 
-Windows verification includes 23 library tests, playback/persistence workflows,
-transfer handling, live folder detection and pointer/keyboard checks. Screenshots
+Windows verification includes 23 library tests and 4 artwork tests (including
+bounded WebP and corrupt embedded pictures), playback/persistence workflows,
+transfer handling, live folder detection and pointer/keyboard checks. Renderer
+checks verify seek, volume and download fills from their left edge at multiple
+values. Row activation covers titles, details and spacing as well as artwork. Screenshots
 cover compact and wide layouts; glyph checks exercise software and GPU renderers.
-The previous installed build measured 49.8 MiB **idle** working set. This is not a
-playback peak or a guarantee; the normal-playback target remains ≤130 MB including
-child processes.
+The October 10 Windows build passed nine native tray restore cycles across solid,
+translucent and maximized windows, with complete repaint and unchanged window size.
+Installation matched the verified player bytes and preserved the library database.
+Default software rendering during one generated WAV/WebP playback fixture measured
+43.4 MB working set, 12.6 MB private memory and no child processes. This short sample
+is not a large-library or playback-peak guarantee; the target remains ≤130 MB including
+child processes. Linux builds remain deferred under the 100 MB download cap.
 
 Physical DPI transitions, screen-reader announcements, large-library performance,
 real download peaks and Linux runtime still need verification. See the examples

@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui = SetupWindow::new()?;
     ui.set_version(env!("CARGO_PKG_VERSION").into());
     ui.set_updating(true);
-    ui.set_install_path(r"C:\Users\Naveed\AppData\Local\Programs\Monolith".into());
+    ui.set_install_path(r"C:\Apps\Monolith".into());
     ui.set_step(step);
     ui.set_progress(0.6);
     ui.set_status("Registering Monolith and its uninstaller.".into());

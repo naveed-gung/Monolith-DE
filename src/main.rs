@@ -440,7 +440,7 @@ fn run() -> Result<()> {
                     let weak = app.as_weak();
                     app.on_hide_to_tray(move || {
                         if let Some(ui) = weak.upgrade() {
-                            let _ = ui.hide();
+                            native::hide_to_tray(&ui);
                         }
                     });
                     let _ = native.sync(&app);

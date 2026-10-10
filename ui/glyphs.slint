@@ -42,41 +42,21 @@ component GlyphBox inherits Rectangle {
         }
     }
 
-    // ---- 1: Songs. A note that becomes an equaliser. ---------------------
+    // Songs keeps the same connected note at every hover phase.
     if root.kind == 1: Rectangle {
-        x: (3px * root.unit);
-        y: (3px * root.unit);
-        width: (18px * root.unit);
-        height: (18px * root.unit);
-        // The note, dissolving as the bars arrive.
-        opacity: 1 - root.active;
-        Rectangle {
-            x: (4px * root.unit); y: (11px * root.unit); width: (5px * root.unit); height: (4px * root.unit);
-            border-radius: (2.5px * root.unit); background: root.tint;
+        x: 3px * root.unit;
+        y: (3px - root.active * 1px) * root.unit;
+        width: 18px * root.unit; height: 18px * root.unit;
+        Rectangle { x: 2px * root.unit; y: 12px * root.unit; width: 5px * root.unit; height: 4px * root.unit; border-radius: 2.5px * root.unit; background: root.tint; }
+        Rectangle { x: 11px * root.unit; y: 10px * root.unit; width: 5px * root.unit; height: 4px * root.unit; border-radius: 2.5px * root.unit; background: root.tint; }
+        Rectangle { x: 6px * root.unit; y: 4px * root.unit; width: 1.6px * root.unit; height: 10px * root.unit; background: root.tint; }
+        Rectangle { x: 15px * root.unit; y: 2px * root.unit; width: 1.6px * root.unit; height: 10px * root.unit; background: root.tint; }
+        Path {
+            width: root.width; height: root.height;
+            viewbox-width: 18; viewbox-height: 18;
+            stroke: root.tint; stroke-width: 1.6px;
+            MoveTo { x: 6.8; y: 4.8; } LineTo { x: 15.8; y: 2.8; }
         }
-        Rectangle {
-            x: (12px * root.unit); y: (7px * root.unit); width: (5px * root.unit); height: (4px * root.unit);
-            border-radius: (2.5px * root.unit); background: root.tint;
-        }
-        Rectangle { x: (8px * root.unit); y: (3px * root.unit); width: (2px * root.unit); height: (9px * root.unit); background: root.tint; }
-        Rectangle { x: (16px * root.unit); y: (1px * root.unit); width: (2px * root.unit); height: (9px * root.unit); background: root.tint; }
-        Rectangle { x: (8px * root.unit); y: (2px * root.unit); width: (10px * root.unit); height: (2px * root.unit); background: root.tint; }
-    }
-    if root.kind == 1: Rectangle {
-        x: (3px * root.unit);
-        y: (3px * root.unit);
-        width: (18px * root.unit);
-        height: (18px * root.unit);
-        opacity: root.active;
-        // Heights settle at a fixed pattern so the bars read as a level meter
-        // rather than as noise. Written out rather than looped: an array of
-        // floats does not survive Slint's model inference here, and four bars
-        // are not worth a workaround. Each grows up from the baseline, so the
-        // meter rises with the state instead of fading in at full height.
-        Rectangle { x: (0px * root.unit); y: (17px * root.unit) - (10.2px * root.unit) * root.active; width: (3px * root.unit); height: (10.2px * root.unit) * root.active; border-radius: (1.5px * root.unit); background: root.tint; opacity: 0.78; }
-        Rectangle { x: (4.5px * root.unit); y: (17px * root.unit) - (12.5px * root.unit) * root.active; width: (3px * root.unit); height: (12.5px * root.unit) * root.active; border-radius: (1.5px * root.unit); background: root.tint; opacity: 0.78; }
-        Rectangle { x: (9px * root.unit); y: (17px * root.unit) - (10.9px * root.unit) * root.active; width: (3px * root.unit); height: (10.9px * root.unit) * root.active; border-radius: (1.5px * root.unit); background: root.tint; opacity: 0.78; }
-        Rectangle { x: (13.5px * root.unit); y: (17px * root.unit) - (13.6px * root.unit) * root.active; width: (3px * root.unit); height: (13.6px * root.unit) * root.active; border-radius: (1.5px * root.unit); background: root.tint; }
     }
 
     // Search stays a circular magnifying glass. Lens and handle move together.

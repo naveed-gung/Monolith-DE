@@ -76,11 +76,13 @@ mod platform {
             match action {
                 1 => {
                     if let Some(ui) = context.ui.upgrade() {
-                        let _ = ui.show();
                         ui.window().with_winit_window(|w| {
+                            w.set_visible(true);
                             w.set_minimized(false);
                             w.focus_window();
+                            w.request_redraw();
                         });
+                        ui.window().request_redraw();
                     }
                 }
                 2 => {
@@ -100,6 +102,15 @@ mod platform {
             return LRESULT(0);
         }
         unsafe { DefSubclassProc(hwnd, msg, wp, lp) }
+    }
+    /// Preserve the HWND and placement while notifying Slint that its backing
+    /// buffer is lost. Windows emits a zero-size resize on minimize; Slint uses
+    /// that event to invalidate its software renderer's partial-paint cache.
+    pub fn hide_to_tray(ui: &AppWindow) {
+        ui.window().with_winit_window(|window| {
+            window.set_minimized(true);
+            window.set_visible(false);
+        });
     }
     pub struct Native {
         hwnd: HWND,
@@ -308,7 +319,7 @@ mod platform {
     }
 }
 #[cfg(windows)]
-pub use platform::{Native, animations_enabled, system_light_theme};
+pub use platform::{Native, animations_enabled, hide_to_tray, system_light_theme};
 
 /// Desktop theme on non-Windows platforms; true means light.
 ///

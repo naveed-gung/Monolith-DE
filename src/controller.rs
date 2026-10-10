@@ -1048,43 +1048,41 @@ const EXPANDED_RADIUS_RATIO: f32 = 12.0 / 370.0;
 fn decode_cover(path: &str) -> Option<image::RgbaImage> {
     use lofty::file::TaggedFileExt;
     const MAX_ART_BYTES: usize = 8 * 1024 * 1024;
-    let source = std::path::Path::new(path);
-    let data: Vec<u8> = match lofty::read_from_path(path).ok().and_then(|file| {
-        file.primary_tag()
-            .or_else(|| file.first_tag())
-            .and_then(|tag| tag.pictures().first().cloned())
-    }) {
-        Some(picture) if picture.data().len() <= MAX_ART_BYTES => picture.data().to_vec(),
-        // Downloads keep the source thumbnail beside the audio, so use it when
-        // the file itself carries no embedded artwork.
-        _ => {
-            let image = library::sidecar_image(source)?;
-            use std::io::Read;
-            let mut data = Vec::new();
-            std::fs::File::open(image)
-                .ok()?
-                .take((MAX_ART_BYTES + 1) as u64)
-                .read_to_end(&mut data)
-                .ok()?;
-            if data.len() > MAX_ART_BYTES {
-                return None;
-            }
-            data
+    fn decode(data: &[u8]) -> Option<image::RgbaImage> {
+        if data.len() > MAX_ART_BYTES {
+            return None;
         }
-    };
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(&data[..]))
-        .with_guessed_format()
+        let mut reader = image::ImageReader::new(std::io::Cursor::new(data))
+            .with_guessed_format()
+            .ok()?;
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(2048);
+        limits.max_image_height = Some(2048);
+        limits.max_alloc = Some(32 * 1024 * 1024);
+        reader.limits(limits);
+        Some(reader.decode().ok()?.into_rgba8())
+    }
+    // Some files keep text in their primary tag and artwork in another tag.
+    // A corrupt/unsupported picture must not mask a usable later picture.
+    if let Ok(file) = lofty::read_from_path(path) {
+        if let Some(art) = file
+            .tags()
+            .iter()
+            .flat_map(|tag| tag.pictures())
+            .find_map(|picture| decode(picture.data()))
+        {
+            return Some(art);
+        }
+    }
+    let sidecar = library::sidecar_image(std::path::Path::new(path))?;
+    use std::io::Read;
+    let mut data = Vec::new();
+    std::fs::File::open(sidecar)
+        .ok()?
+        .take((MAX_ART_BYTES + 1) as u64)
+        .read_to_end(&mut data)
         .ok()?;
-    // The decoder materialises the full image before it is thumbnailed, so
-    // the cap has to fit one decoded frame: 1600x1600 RGBA is ~10 MB. The old
-    // 4096 px / 32 MB pair allowed dimensions the allocator refused, so
-    // high-resolution embedded art silently rendered with no cover at all.
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(1600);
-    limits.max_image_height = Some(1600);
-    limits.max_alloc = Some(20 * 1024 * 1024);
-    reader.limits(limits);
-    Some(reader.decode().ok()?.into_rgba8())
+    decode(&data)
 }
 
 fn row_cover(path: &str) -> Option<Art> {
@@ -1125,6 +1123,76 @@ fn cover(path: &str) -> Option<(Art, Art)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_webp_sidecars_and_skips_corrupt_embedded_pictures() {
+        use lofty::{
+            config::WriteOptions,
+            file::TaggedFileExt,
+            picture::{MimeType, Picture},
+            tag::{Tag, TagExt, TagType},
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let audio = dir.path().join("track.wav");
+        // A minimal valid PCM file keeps this check independent of audio devices.
+        let mut wav = b"RIFF".to_vec();
+        wav.extend_from_slice(&38u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8000u32.to_le_bytes());
+        wav.extend_from_slice(&16000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&2u32.to_le_bytes());
+        wav.extend_from_slice(&[0, 0]);
+        std::fs::write(&audio, wav).unwrap();
+        let sidecar = audio.with_extension("webp");
+        image::RgbaImage::from_pixel(2048, 1024, image::Rgba([220, 80, 60, 255]))
+            .save(&sidecar)
+            .unwrap();
+        assert!(
+            row_cover(audio.to_str().unwrap()).is_some(),
+            "bounded 2K WebP sidecar"
+        );
+        let data = std::fs::read(&sidecar).unwrap();
+        std::fs::remove_file(sidecar).unwrap();
+        let mut info = Tag::new(TagType::RiffInfo);
+        info.insert_text(
+            lofty::tag::ItemKey::TrackTitle,
+            "Text-only metadata tag".into(),
+        );
+        info.save_to_path(&audio, WriteOptions::default()).unwrap();
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.push_picture(
+            Picture::unchecked(b"corrupt cover".to_vec())
+                .mime_type(MimeType::Png)
+                .build(),
+        );
+        tag.push_picture(
+            Picture::unchecked(data)
+                .mime_type(MimeType::from_str("image/webp"))
+                .build(),
+        );
+        tag.save_to_path(&audio, WriteOptions::default()).unwrap();
+        let file = lofty::read_from_path(&audio).unwrap();
+        assert!(
+            file.tags()
+                .iter()
+                .flat_map(|tag| tag.pictures())
+                .next()
+                .unwrap()
+                .data()
+                == b"corrupt cover",
+            "fixture starts with an invalid embedded picture"
+        );
+        assert!(
+            row_cover(audio.to_str().unwrap()).is_some(),
+            "later valid embedded WebP picture"
+        );
+    }
 
     #[test]
     fn row_cover_bounds_sidecars_and_handles_missing_or_bad_images() {

@@ -386,6 +386,8 @@ export component Slider inherits Rectangle {
         background: Theme.track;
         animate height { duration: Theme.fast; }
         Rectangle {
+            x: 0px;
+            y: 0px;
             width: parent.width * root.ratio;
             height: parent.height;
             border-radius: parent.border-radius;
@@ -696,6 +698,7 @@ export component ProgressBar inherits Rectangle {
     accessible-value-minimum: 0;
     accessible-value-maximum: 100;
     Rectangle {
+        x: 0px; y: 0px;
         width: parent.width * max(0, min(1, root.progress));
         height: parent.height;
         border-radius: parent.border-radius;

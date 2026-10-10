@@ -99,6 +99,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
             })
             .collect();
+        // Keep the synthetic now-playing cover consistent with its row.
+        ui.set_cover(rows[1].thumbnail.clone());
+        ui.set_has_cover(true);
         ui.set_tracks(ModelRc::from(Rc::new(VecModel::from(rows))));
         ui.set_playlists(ModelRc::from(Rc::new(VecModel::from(
             ["All music", "Favorites", "Evening", "Focus"]
