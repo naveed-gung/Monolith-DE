@@ -38,7 +38,9 @@ live locally in SQLite. No account, cloud sync, or telemetry service.
 
 <img src="docs/img/player.png" width="1000" alt="Expanded player showing real local WebP fixture artwork and left-to-right playback progress">
 
-<img src="docs/img/guide.png" width="1000" alt="Section-aware guide beside Library, with the rest of the interface dimmed and blocked">
+| Learn the controls in place | Remove with confidence |
+| --- | --- |
+| ![Contextual Library guide with dimmed and blocked background](docs/img/guide.png) | ![Library removal warning with Cancel as the safe default](docs/img/remove-warning.png) |
 
 </details>
 
@@ -51,12 +53,12 @@ are not evidence of audio playback. Linux appearance has not been captured yet.
 | Feature | What you get |
 | --- | --- |
 | **Automatic imports** | New audio in Music/Monolith and your selected save folder appears while the app is open. Nested folders work too. |
-| **Library and playlists** | Favorites, custom playlists, and M3U/PLS imports. Removing a library entry leaves the original file alone. |
+| **Library and playlists** | Favorites, custom playlists, and M3U/PLS imports. Song removal asks for confirmation, defaults to Cancel, and leaves the original audio file alone. Removing from a playlist keeps the song in Library. |
 | **Songs and search** | Sort by title, artist, album or added order. Local search responds after a short typing debounce. |
 | **Playback** | Click a song's artwork, title, details or row to play/pause. Favorites and playlist actions stay separate. Local covers, seek, volume, shuffle and repeat work in the compact bar and expanded player. |
 | **Downloads** | Explicit transfers through a user-selected yt-dlp executable. Real progress, cancellation and history; tools are not bundled. |
 | **Appearance** | Dark, light and system modes, consistent outline icons, quiet hover transitions, visible keyboard focus and adaptive navigation. Windows motion preference is respected. |
-| **Guided tour** | Help follows the section it explains. Next and Back change sections while the underlying interface stays dimmed and blocked; Close or Escape returns control to the app. |
+| **Guided tour** | Help always starts at Library. Next walks through import, filtering, collections, playlists, song actions and the player, then the remaining sections. Bubbles follow the control being explained; the background stays dimmed and blocked. Close or Escape ends the tour. |
 | **Windows integration** | Media controls, tray support that preserves your player and window size, optional acrylic, and a per-user installer. |
 
 ### Drop a file in. Keep listening.
@@ -76,9 +78,22 @@ while Monolith was closed are found after opening it. An unchanged file you
 intentionally removed from the library stays removed across restarts; use manual
 import to bring it back. Other folders remain available through the import picker.
 
-If a saved song is unavailable, restore its file at the saved path or import its
-current folder. Library entries store file paths; they do not contain copies of
-the audio. A failed selection preserves the track already playing.
+If a saved song is unavailable, Monolith shows its saved path and offers **Locate
+file**. Select that song's audio at its new location to reconnect the existing
+entry and resume playback. Favorites and playlist memberships are kept. Invalid
+files and files already assigned to another song are rejected before the saved
+path changes. Cancelling keeps everything as it was. If the original audio was
+deleted, restore it first; the library database does not contain a copy of it.
+
+```mermaid
+flowchart LR
+    Missing["Audio moved or missing"] --> Locate["Locate file"]
+    Locate --> Check{"Valid audio and unused path?"}
+    Check -- Yes --> Reconnect["Reconnect the same library entry"]
+    Reconnect --> Play["Resume playback"]
+    Check -- No --> Keep["Keep the existing entry"]
+    Locate -- Cancel --> Keep
+```
 
 ## Install
 
@@ -177,7 +192,7 @@ Rust build caches are much larger than the shipped application. `target/` and
 release packages before cleaning caches; dependency sources remain in Cargo's
 separate cache.
 
-Windows verification includes 23 library tests and 4 artwork tests (including
+Windows verification includes 24 library tests and 4 artwork tests (including
 bounded WebP and corrupt embedded pictures), playback/persistence workflows,
 transfer handling, live folder detection and pointer/keyboard checks. Renderer
 checks verify seek, volume and download fills from their left edge at multiple
@@ -185,12 +200,13 @@ values. Row activation covers titles, details and spacing as well as artwork. Sc
 cover compact and wide layouts; glyph checks exercise software and GPU renderers.
 The modal guide passes Next/Back, Tab/Shift+Tab, Escape and background input checks
 at 1280×820, 760×600 and 420×380, including a collapsed rail and light mode. Its
-cards remain anchored to the highlighted navigation section.
-The October 10 Windows build passed nine native tray restore cycles across solid,
-translucent and maximized windows, with complete repaint and unchanged window size.
+cards follow the highlighted Library control or navigation section. Help also restarts correctly after completing or closing the tour. Warning checks cover Cancel/Remove, playlist identity and background isolation; moved-file recovery also passes through the real Windows file picker.
+An earlier October 10 Windows build passed nine native tray restore cycles across
+solid, translucent and maximized windows. The latest update repeats three solid
+tray restores, with complete repaint and unchanged window size.
 Installation matched the verified player bytes and preserved the library database.
 Default software rendering during one generated WAV/WebP playback fixture measured
-43.4 MB working set, 12.6 MB private memory and no child processes. This short sample
+43.8 MB working set, 12.9 MB private memory and no child processes in the latest ten-second sample. This short sample
 is not a large-library or playback-peak guarantee; the target remains ≤130 MB including
 child processes. Linux builds remain deferred under the 100 MB download cap.
 

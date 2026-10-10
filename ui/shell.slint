@@ -5,7 +5,8 @@ import { TrackRow, LibraryPage } from "library.slint";
 import { PlayerBar, ExpandedPlayer } from "player.slint";
 import { DownloadsPage } from "downloads.slint";
 import { SettingsPage } from "settings.slint";
-import { CoachMark, ThemeHint, GuideStep } from "guide.slint";
+import { ActionDialog } from "dialog.slint";
+import { CoachMark, ThemeHint, GuideStep, TourTarget } from "guide.slint";
 
 export component AppShell inherits FocusScope {
     focus-on-click: false;
@@ -81,7 +82,7 @@ export component AppShell inherits FocusScope {
     callback favorite-track(int);
     callback remove-track(int);
     callback add-to-playlist(int, int);
-    callback remove-from-playlist(int);
+    callback remove-from-playlist(int, int);
     callback filter-changed(int, string);
     callback sort-changed(int);
     callback page-changed(int);
@@ -105,6 +106,29 @@ export component AppShell inherits FocusScope {
     callback open-settings;
     callback theme-hint-dismissed;
     callback guide-done;
+    in-out property <int> unavailable-track-id: -1;
+    in property <string> unavailable-title;
+    in property <string> unavailable-path;
+    callback locate-track(int);
+    private property <int> removal-id: -1;
+    private property <bool> removal-playlist;
+    private property <string> removal-title;
+    private property <string> removal-collection;
+    private property <int> removal-list-id;
+    private property <bool> dialog-open: root.removal-id >= 0 || root.unavailable-track-id >= 0;
+    function request-removal(id: int, title: string, playlist: bool) {
+        root.removal-title = title;
+        root.removal-playlist = playlist;
+        root.removal-collection = root.playlists[root.playlist-index];
+        root.removal-list-id = root.playlist-ids[root.playlist-index];
+        root.removal-id = id;
+        warning.focus-safe();
+    }
+    function dismiss-dialog() {
+        root.removal-id = -1;
+        root.unavailable-track-id = -1;
+        root.focus();
+    }
 
     // The rail auto-collapses on narrow windows and can also be closed by hand.
     private property <bool> rail: root.viewport-width < 900px || root.rail-collapsed;
@@ -147,13 +171,26 @@ export component AppShell inherits FocusScope {
     // Keep this public property for the existing Rust API.
     in-out property <bool> guide-touring: true;
     private property <[GuideStep]> guide-steps: [
-        { title: "Library, your own collection", body: "Import a music folder, then browse All music, Favorites and playlists. Artwork comes from your files or images beside them. Your originals stay in place.", page: 0 },
-        { title: "Songs, the complete list", body: "Sort every imported track by title, artist, album or date added. Click a song row to play; the heart and playlist buttons keep their own actions.", page: 1 },
-        { title: "Search your music", body: "Find songs by title, artist or album. Search filters your local library; it never sends your query anywhere.", page: 2 },
-        { title: "Downloads, save a link", body: "Paste a YouTube or YouTube Music link and choose M4A or MP3. Download progress and errors appear here. MP3 conversion needs FFmpeg.", page: 3 },
-        { title: "Keep saved music together", body: "Completed audio joins your library automatically. Choose your save folder and yt-dlp executable in Settings. Existing files are never overwritten.", page: 3 },
-        { title: "Settings, make it yours", body: "Choose a theme, rendering mode and download folder. If a song has moved, restore its saved path or import its new folder. Your library stays on this PC.", page: 4 }
+        { title: "Library, your own collection", body: "This is your music's home. Next will show you the controls inside Library, one at a time.", page: 0, target: 0 },
+        { title: "Bring your music in", body: "Import audio files or choose a music folder. Monolith links to your originals; it does not copy or download them.", page: 0, target: 1 },
+        { title: "Find a song quickly", body: "Type a title, artist or album to filter this collection. The search field appears once you import music.", page: 0, target: 2 },
+        { title: "All music, Favorites, playlists", body: "Use these collections to narrow the list. A song's heart adds it to Favorites without moving its file.", page: 0, target: 3 },
+        { title: "Make a playlist", body: "Choose New playlist, enter a name, then Create. You can also import an M3U or PLS playlist of local songs.", page: 0, target: 4 },
+        { title: "Each song has its own actions", body: "Click a song to play or pause. Heart saves a favorite; the list button manages playlists. Remove asks first.", page: 0, target: 5 },
+        { title: "Your player stays with you", body: "Play, pause and seek here while browsing. Click the artwork to expand the player. A missing file offers Locate file to reconnect it.", page: 0, target: 6 },
+        { title: "Songs, the complete list", body: "Sort every imported track by title, artist, album or date added. Songs shows the entire library, regardless of your Library collection.", page: 1, target: 0 },
+        { title: "Search your music", body: "Find songs across your local library. Your search stays on this device.", page: 2, target: 0 },
+        { title: "Downloads, save a link", body: "Choose M4A or MP3, then follow real progress here. MP3 needs FFmpeg. Saved audio joins Library automatically; choose its folder in Settings.", page: 3, target: 0 },
+        { title: "Settings, make it yours", body: "Choose a theme, rendering mode and music folder. Your library stays on this PC. Reopen Help anytime to start this tour again.", page: 4, target: 0 }
     ];
+    private property <int> guide-kind: root.guide-step >= 0 && root.guide-step < root.guide-steps.length
+        ? root.guide-steps[root.guide-step].target : 0;
+    private property <TourTarget> library-target;
+    private property <TourTarget> guide-target: root.guide-kind == 0
+        ? { x: 12px, y: root.guide-anchor - root.nav-row / 2, width: root.rail-width-now - 24px, height: root.nav-row }
+        : root.guide-kind == 6
+        ? { x: player.absolute-position.x + 16px, y: player.absolute-position.y + 4px, width: player.width - 32px, height: player.height - 8px }
+        : root.library-target;
     changed guide-open => {
         if root.guide-open {
             root.player-open = false;
@@ -167,6 +204,7 @@ export component AppShell inherits FocusScope {
         }
     }
     capture-key-pressed(event) => {
+        if root.dialog-open { return warning.handle-key(event); }
         if root.guide-open { return coach.handle-key(event); }
         return reject;
     }
@@ -302,7 +340,7 @@ export component AppShell inherits FocusScope {
                     label: "Show app guide";
                     clicked => {
                         root.guide-touring = true;
-                        root.guide-step = root.page == 4 ? 5 : root.page;
+                        root.guide-step = 0;
                         root.guide-open = true;
                     }
                 }
@@ -350,6 +388,8 @@ export component AppShell inherits FocusScope {
                             animate y, opacity { duration: root.resetting ? 0ms : Theme.slow; }
                             if root.page < 3: LibraryPage {
                                 page: root.page;
+                                tour-kind: root.guide-kind;
+                                tour-area-changed(area) => { root.library-target = area; }
                                 total-tracks: root.total-tracks;
                                 album-count: root.album-count;
                                 favorite-count: root.favorite-count;
@@ -373,9 +413,9 @@ export component AppShell inherits FocusScope {
         play-track(id) => { root.play-track(id); }
                                 toggle-play => { root.toggle-play(); }
                                 favorite-track(id) => { root.favorite-track(id); }
-                                remove-track(id) => { root.remove-track(id); }
+                                remove-track(id, title) => { root.request-removal(id, title, false); }
                                 add-to-playlist(id, index) => { root.add-to-playlist(id, index); }
-                                remove-from-playlist(id) => { root.remove-from-playlist(id); }
+                                remove-from-playlist(id, title) => { root.request-removal(id, title, true); }
                             }
                             if root.page == 3: DownloadsPage {
                                 compact: root.rail;
@@ -424,7 +464,7 @@ export component AppShell inherits FocusScope {
                 }
             }
         }
-        PlayerBar {
+        player := PlayerBar {
             horizontal-stretch: 1;
             compact: root.compact-player;
             tiny: root.viewport-height < 440px;
@@ -484,25 +524,24 @@ export component AppShell inherits FocusScope {
     }
     // Full-window, non-dismissable scrim blocks pointer, wheel and hover input.
     // Keyboard capture above also prevents activation of previously focused UI.
-    if root.guide-open: Rectangle {
+    if root.guide-open || root.dialog-open: Rectangle {
         z: 20;
         background: Theme.scrim;
         TouchArea {
-            clicked => { coach.focus-primary(); }
+            clicked => { if root.dialog-open { warning.focus-safe(); } else { coach.focus-primary(); } }
             scroll-event(event) => { return accept; }
         }
     }
     if root.guide-open: Rectangle {
-        z: 21; x: 12px;
-        y: root.guide-anchor - root.nav-row / 2;
-        width: root.rail-width-now - 24px; height: root.nav-row;
+        z: 21; x: root.guide-target.x; y: root.guide-target.y;
+        width: root.guide-target.width; height: root.guide-target.height;
         border-radius: Theme.radius-control;
         border-width: 1px; border-color: Theme.accent;
         background: Theme.accent-soft;
         accessible-role: none;
     }
     coach := CoachMark {
-        shown: root.guide-open;
+        shown: root.guide-open && !root.dialog-open;
         steps: root.guide-steps;
         step <=> root.guide-step;
         // The card follows the app: every step names the page it is about.
@@ -511,11 +550,35 @@ export component AppShell inherits FocusScope {
                 root.selected-page = root.guide-steps[value].page;
             }
         }
-        anchor-y: root.guide-anchor;
+        target: root.guide-target;
+        contextual: root.guide-kind != 0;
         rail-width: root.rail-width-now;
         viewport-width: root.viewport-width;
         viewport-height: root.viewport-height;
         closed => { root.guide-open = false; }
         finished => { root.guide-open = false; root.guide-done(); }
+    }
+    warning := ActionDialog {
+        shown: root.dialog-open;
+        destructive: root.removal-id >= 0;
+        heading: root.removal-id >= 0
+            ? root.removal-playlist ? "Remove from playlist?" : "Remove from library?"
+            : "This song's file is missing";
+        subject: root.removal-id >= 0 ? root.removal-title : root.unavailable-title;
+        description: root.removal-id >= 0
+            ? root.removal-playlist ? "Remove from \"" + root.removal-collection + "\"? The song stays in your library. Its audio file is kept."
+                : "This removes the song from your library and its playlists. The original audio file is kept."
+            : "Choose this song's audio file at its new location. Favorites and playlists are kept. If the file was deleted, restore it first.";
+        detail: root.removal-id >= 0 ? "" : root.unavailable-path;
+        action: root.removal-id >= 0 ? "Remove" : "Locate file";
+        viewport-width: root.viewport-width; viewport-height: root.viewport-height;
+        cancelled => { root.dismiss-dialog(); }
+        confirmed => {
+            if root.removal-id >= 0 {
+                if root.removal-playlist { root.remove-from-playlist(root.removal-id, root.removal-list-id); }
+                else { root.remove-track(root.removal-id); }
+            } else { root.locate-track(root.unavailable-track-id); }
+            root.dismiss-dialog();
+        }
     }
 }

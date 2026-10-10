@@ -28,6 +28,7 @@ pub enum Command {
     /// 0 title, 1 artist, 2 album, 3 recently added.
     Sort(i32),
     Play(i64),
+    Relink(i64, PathBuf),
     Thumbnail(i64),
     Toggle,
     Resume,
@@ -41,7 +42,7 @@ pub enum Command {
     NewPlaylist(String),
     DeletePlaylist(i64),
     AddToPlaylist(i64, usize),
-    RemoveFromPlaylist(i64),
+    RemoveFromPlaylist(i64, i64),
     Save(String, String),
     Shuffle(bool),
     Repeat(i32),
@@ -331,6 +332,13 @@ impl Worker {
             .ok_or("Track is no longer in the library")?;
         let file = std::fs::File::open(&t.path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
+                let title = t.title.clone();
+                let path = t.path.clone();
+                update(&self.ui, move |u| {
+                    u.set_unavailable_title(title.into());
+                    u.set_unavailable_path(path.into());
+                    u.set_unavailable_track_id(id as i32);
+                });
                 format!(
                     "\"{}\" is unavailable. Restore the file or import its new folder. Saved path: {}",
                     t.title,
@@ -555,6 +563,18 @@ impl Worker {
                 }
             }
             Command::Thumbnail(id) => self.thumbnail(id),
+            Command::Relink(id, path) => {
+                // Validate the decoder before changing the saved path. A bad
+                // selection cannot replace the entry or interrupt current audio.
+                let _ = Decoder::try_from(std::fs::File::open(&path)?)?;
+                self.db.relink(id, &path)?;
+                self.art.remove(&id);
+                self.art_order.retain(|cached| *cached != id);
+                self.refresh()?;
+                self.start(id, 0.)?;
+                update(&self.ui, |u| u.set_unavailable_track_id(-1));
+                status(&self.ui, "Song reconnected. Favorites and playlists kept.");
+            }
             Command::Play(id) => {
                 self.queue = self.visible.clone();
                 if self.shuffle {
@@ -678,13 +698,10 @@ impl Worker {
                 self.refresh()?;
                 status(&self.ui, "Added to playlist.");
             }
-            Command::RemoveFromPlaylist(id) => {
-                let playlist = self
-                    .filter
-                    .checked_sub(2)
-                    .and_then(|i| self.playlists.get(i))
-                    .ok_or("Choose a playlist")?
-                    .0;
+            Command::RemoveFromPlaylist(id, playlist) => {
+                if playlist <= 0 {
+                    return Err("Choose a playlist".into());
+                }
                 self.db.remove_from_playlist(playlist, id)?;
                 self.refresh()?;
             }

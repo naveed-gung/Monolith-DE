@@ -96,7 +96,7 @@ export component AppWindow inherits Window {
     callback favorite-track(int);
     callback remove-track(int);
     callback add-to-playlist(int, int);
-    callback remove-from-playlist(int);
+    callback remove-from-playlist(int, int);
     callback filter-changed(int, string);
     callback sort-changed(int);
     callback page-changed(int);
@@ -120,6 +120,10 @@ export component AppWindow inherits Window {
     callback open-settings;
     callback theme-hint-dismissed;
     callback guide-done;
+    in-out property <int> unavailable-track-id <=> shell.unavailable-track-id;
+    in property <string> unavailable-title <=> shell.unavailable-title;
+    in property <string> unavailable-path <=> shell.unavailable-path;
+    callback locate-track(int);
 
     changed current-id => { root.transport-changed(); }
     changed playing => { root.transport-changed(); }
@@ -140,7 +144,7 @@ export component AppWindow inherits Window {
         favorite-track(id) => { root.favorite-track(id); }
         remove-track(id) => { root.remove-track(id); }
         add-to-playlist(id, index) => { root.add-to-playlist(id, index); }
-        remove-from-playlist(id) => { root.remove-from-playlist(id); }
+        remove-from-playlist(id, playlist) => { root.remove-from-playlist(id, playlist); }
         filter-changed(index, text) => { root.filter-changed(index, text); }
         sort-changed(order) => { root.sort-changed(order); }
         page-changed(page) => { root.page-changed(page); }
@@ -164,6 +168,7 @@ export component AppWindow inherits Window {
         open-settings => { root.open-settings(); }
         theme-hint-dismissed => { root.theme-hint-dismissed(); }
         guide-done => { root.guide-done(); }
+        locate-track(id) => { root.locate-track(id); }
     }
 }
 

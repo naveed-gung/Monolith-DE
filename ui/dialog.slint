@@ -1,0 +1,84 @@
+import { Theme } from "theme.slint";
+import { Button, ButtonKind } from "controls.slint";
+
+// Shared warning/recovery card. The shell blocks the page and captures keys.
+export component ActionDialog inherits Rectangle {
+    in property <bool> shown;
+    in property <bool> destructive;
+    in property <string> heading;
+    in property <string> subject;
+    in property <string> description;
+    in property <string> detail;
+    in property <string> action;
+    in property <length> viewport-width;
+    in property <length> viewport-height;
+    callback cancelled;
+    callback confirmed;
+    visible: root.shown;
+    z: 30;
+    width: min(440px, root.viewport-width - 32px);
+    height: content.preferred-height;
+    x: (root.viewport-width - root.width) / 2;
+    y: max(12px, (root.viewport-height - root.height) / 2);
+    background: Theme.raised;
+    border-radius: Theme.radius-panel;
+    border-width: 1px;
+    border-color: Theme.border;
+    accessible-role: groupbox;
+    accessible-label: root.heading;
+    changed shown => { if root.shown { cancel.focus(); } }
+    public function focus-safe() { cancel.focus(); }
+    public function handle-key(event: KeyEvent) -> EventResult {
+        if event.text == Key.Escape { root.cancelled(); }
+        else if event.text == Key.Tab || event.text == Key.Backtab {
+            if cancel.has-focus { confirm.focus(); } else { cancel.focus(); }
+        } else if event.text == " " || event.text == "\n" {
+            if confirm.has-focus { root.confirmed(); } else { root.cancelled(); }
+        }
+        return accept;
+    }
+    TouchArea {
+        clicked => { cancel.focus(); }
+        scroll-event(event) => { return accept; }
+    }
+    content := VerticalLayout {
+        padding: 20px;
+        spacing: 12px;
+        Text {
+            text: root.heading; color: Theme.foreground;
+            font-size: Theme.type-heading; font-weight: 600;
+            wrap: word-wrap; accessible-live-region: assertive;
+        }
+        Text {
+            text: root.subject; color: Theme.foreground;
+            font-size: Theme.type-body; overflow: elide;
+        }
+        Text {
+            text: root.description; color: Theme.secondary;
+            font-size: Theme.type-label; wrap: word-wrap;
+        }
+        if root.detail != "": Rectangle {
+            height: 40px; border-radius: Theme.radius-control;
+            background: Theme.surface;
+            Text {
+                x: 10px; width: parent.width - 20px; height: parent.height;
+                text: root.detail; color: Theme.muted; overflow: elide;
+                font-size: Theme.type-caption; vertical-alignment: center;
+                accessible-label: root.detail;
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px; vertical-stretch: 0;
+            Rectangle { horizontal-stretch: 1; }
+            cancel := Button {
+                text: "Cancel";
+                clicked => { root.cancelled(); }
+            }
+            confirm := Button {
+                text: root.action;
+                kind: root.destructive ? ButtonKind.danger : ButtonKind.primary;
+                clicked => { root.confirmed(); }
+            }
+        }
+    }
+}

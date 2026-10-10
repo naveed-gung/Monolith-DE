@@ -29,21 +29,22 @@ fn key(ui: &AppWindow, text: slint::SharedString) {
 }
 
 // Find the primary button in the rendered card rather than mirroring its layout.
-fn primary(ui: &AppWindow, rail: f32) -> (f32, f32) {
+fn primary(ui: &AppWindow, _rail: f32) -> (f32, f32) {
     let pixels = ui.window().take_snapshot().unwrap();
     let width = pixels.width() as usize;
-    let card_width = 360_f32.min(width as f32 - rail - 26.);
-    // Sample just inside the button's right edge, clear of its white text.
-    let x = (rail + 14. + card_width - 26.) as usize;
-    let mut start = None;
-    for y in 0..pixels.height() as usize {
-        let p = &pixels.as_bytes()[(y * width + x) * 4..][..4];
-        let red = p[0] > 160 && (p[0] as u16) > p[1] as u16 + 70;
-        if red {
-            start.get_or_insert(y);
-        } else if let Some(top) = start.take() {
-            if y - top >= 25 {
-                return (x as f32, (top + y) as f32 / 2.);
+    for x in (12..width - 12).rev() {
+        let mut start = None;
+        for y in 12..pixels.height() as usize - 12 {
+            let p = &pixels.as_bytes()[(y * width + x) * 4..][..4];
+            let red = p[0] > 160 && (p[0] as u16) > p[1] as u16 + 70;
+            if red {
+                start.get_or_insert(y);
+            } else if let Some(top) = start.take() {
+                let middle = (top + y) / 2;
+                let inside = &pixels.as_bytes()[(middle * width + x.saturating_sub(12)) * 4..][..4];
+                if y - top >= 25 && inside[0] > 160 && inside[0] as u16 > inside[1] as u16 + 70 {
+                    return (x as f32 - 12., (top + y) as f32 / 2.);
+                }
             }
         }
     }
@@ -63,14 +64,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.set_light(true);
     }
     ui.set_total_tracks(1);
+    if args.get(4).is_some_and(|s| s == "empty") {
+        ui.set_total_tracks(0);
+    }
     ui.set_current_id(1);
-    ui.set_tracks(ModelRc::new(VecModel::from(vec![TrackRow {
-        id: 1,
-        title: "Offline guide fixture".into(),
-        detail: "Local artist".into(),
-        duration: "3:20".into(),
-        ..Default::default()
-    }])));
+    if ui.get_total_tracks() > 0 {
+        ui.set_tracks(ModelRc::new(VecModel::from(vec![TrackRow {
+            id: 1,
+            title: "Offline guide fixture".into(),
+            detail: "Local artist".into(),
+            duration: "3:20".into(),
+            ..Default::default()
+        }])));
+    }
     let actions = Rc::new(Cell::new(0));
     let count = actions.clone();
     ui.on_toggle_play(move || count.set(count.get() + 1));
@@ -115,55 +121,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let pixels = ui.window().take_snapshot().unwrap();
             let path = output.join(format!("step-{}.png", ui.get_guide_step()));
             image::save_buffer(&path, pixels.as_bytes(), pixels.width(), pixels.height(), image::ColorType::Rgba8).unwrap();
-            // Tail remains next to the highlighted nav row, even at the floor.
-            let x = (rail + 7.) as usize;
-            let y = nav_y(page) as usize;
-            let p = &pixels.as_bytes()[(y * pixels.width() as usize + x) * 4..][..4];
-            assert!(p[0] > 20, "bubble tail meets nav item {page}");
+            // Every step has a real, visible card and remains on its section.
+            // Only sidebar introductions use a lateral tail.
+            if ui.get_guide_step() == 0 || ui.get_guide_step() >= 7 {
+                let x = (rail + 7.) as usize;
+                let y = nav_y(page) as usize;
+                let p = &pixels.as_bytes()[(y * pixels.width() as usize + x) * 4..][..4];
+                assert!(p[0] > 20, "bubble tail meets nav item {page}");
+            }
             primary(&ui, rail)
         };
         match phase.get() {
-            0 => { click(&ui, 36., nav_y(1)); click(&ui, 36., help_y); }
+            0 => { click(&ui, 36., nav_y(4)); click(&ui, 36., help_y); }
             1 => {
-                assert!(ui.get_guide_open()); assert_eq!(ui.get_guide_step(), 1);
+                assert!(ui.get_guide_open()); assert_eq!(ui.get_guide_step(), 0);
                 for page in 0..5 { click(&ui, 36., nav_y(page)); }
                 click(&ui, width - 50., height - 40.);
-                click(&ui, rail + 200., 230.);
-                assert_eq!(ui.get_selected_page(), 1, "scrim blocks sidebar/page clicks");
+                click(&ui, rail + 150., 230.);
+                assert_eq!(ui.get_selected_page(), 0, "scrim blocks sidebar/page clicks");
                 assert_eq!(actions.get(), 0, "underlying actions blocked");
-                save(1); key(&ui, slint::platform::Key::LeftArrow.into());
-            }
-            2 => {
                 save(0);
                 key(&ui, slint::platform::Key::Tab.into());
                 key(&ui, slint::platform::Key::Backtab.into());
                 key(&ui, "\n".into());
             }
-            3 => {
+            2 => {
                 assert_eq!(ui.get_guide_step(), 1);
                 key(&ui, slint::platform::Key::Tab.into()); key(&ui, " ".into());
             }
-            4 => { assert_eq!(ui.get_guide_step(), 0); key(&ui, slint::platform::Key::RightArrow.into()); }
-            5..=8 => {
-                let expected = [1, 2, 3, 3][phase.get() - 5];
+            3 => { assert_eq!(ui.get_guide_step(), 0); key(&ui, slint::platform::Key::RightArrow.into()); }
+            4..=13 => {
+                let step = phase.get() - 3;
+                assert_eq!(ui.get_guide_step(), step as i32);
+                let expected = if step <= 6 { 0 } else { (step - 6) as i32 };
                 let (x, y) = save(expected); click(&ui, x, y);
             }
-            9 => { let (_, y) = save(4); click(&ui, rail + 14. + 45., y); }
-            10 => { assert_eq!(ui.get_guide_step(), 4); save(3); key(&ui, slint::platform::Key::RightArrow.into()); }
-            11 => { save(4); key(&ui, slint::platform::Key::RightArrow.into()); }
-            12 => {
+            14 => {
                 assert!(!ui.get_guide_open()); assert_eq!(completed.get(), 1);
                 assert_eq!(actions.get(), 0);
                 click(&ui, 36., help_y);
             }
-            13 => {
-                assert!(ui.get_guide_open()); assert_eq!(ui.get_guide_step(), 5);
+            15 => {
+                assert!(ui.get_guide_open()); assert_eq!(ui.get_guide_step(), 0);
+                assert_eq!(ui.get_selected_page(), 0, "Help always restarts at Library");
                 key(&ui, slint::platform::Key::Escape.into());
             }
-            14 => {
-                assert!(!ui.get_guide_open()); click(&ui, 36., nav_y(0));
-                assert_eq!(ui.get_selected_page(), 0, "normal navigation restored");
-                println!("PASS: anchored six-step guide, blocked background mouse/keyboard, Tab/Backtab trap, actual Next/Back, Done/Escape, focus and navigation restored; {width}x{height}.");
+            16 => {
+                assert!(!ui.get_guide_open()); click(&ui, 36., nav_y(1));
+                assert_eq!(ui.get_selected_page(), 1, "normal navigation restored");
+                println!("PASS: eleven-step contextual guide, Help restarts at Library, real Next/Back, blocked page input, Tab/Backtab trap, Done/Escape; {width}x{height}.");
                 slint::quit_event_loop().unwrap();
             }
             _ => unreachable!(),

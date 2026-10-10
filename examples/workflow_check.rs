@@ -64,6 +64,8 @@ fn main() -> Result<()> {
     let second = dir.path().join("second.wav");
     std::fs::copy(&path, &second)?;
     let first = path.clone();
+    let invalid = dir.path().join("invalid.wav");
+    std::fs::write(&invalid, b"not audio")?;
     let relocated = dir.path().join("relocated.wav");
     let selected = Rc::new(Cell::new(-1));
     let selected = selected.clone();
@@ -159,12 +161,23 @@ fn main() -> Result<()> {
                         "missing next file preserves current audio"
                     );
                     assert_eq!(ui.get_current_id(), selected.get());
-                    let missing = if selected.get() == 1 { &second } else { &first };
-                    std::fs::rename(&relocated, missing).unwrap();
-                    sender.send(Command::Next(1)).unwrap();
+                    assert!(ui.get_unavailable_track_id() > 0);
+                    let id = if selected.get() == 1 { 2 } else { 1 };
+                    sender.send(Command::Relink(id, invalid.clone())).unwrap();
+                    tick.set(14);
+                }
+                14 if !ui.get_status().contains("is unavailable") => {
+                    assert_eq!(
+                        ui.get_current_id(),
+                        selected.get(),
+                        "invalid audio leaves current playback alone"
+                    );
+                    let id = if selected.get() == 1 { 2 } else { 1 };
+                    sender.send(Command::Relink(id, relocated.clone())).unwrap();
                     tick.set(9);
                 }
                 9 if ui.get_playing() && ui.get_current_id() != selected.get() => {
+                    assert_eq!(ui.get_unavailable_track_id(), -1);
                     selected.set(ui.get_current_id());
                     sender.send(Command::Repeat(2)).unwrap();
                     sender.send(Command::Seek(7.8)).unwrap();
@@ -196,9 +209,27 @@ fn main() -> Result<()> {
     assert_eq!(db.tracks(db.playlists()?[0].0)?.len(), 1);
     assert_eq!(db.setting("volume", "0"), "0.35");
     // All playback file handles must have been released at stop/shutdown.
-    std::fs::rename(&path, dir.path().join("released.wav"))?;
+    let repaired = db
+        .tracks(0)?
+        .into_iter()
+        .find(|t| {
+            std::path::Path::new(&t.path)
+                .file_name()
+                .is_some_and(|name| name == "relocated.wav")
+        })
+        .expect("saved path must point to selected relocated audio");
+    assert!(
+        db.relink(repaired.id, &dir.path().join("second.wav"))
+            .is_err(),
+        "available tracks cannot be rebound"
+    );
+    assert!(
+        db.relink(9999, &path).is_err(),
+        "unknown tracks cannot be created by repair"
+    );
+    std::fs::rename(&repaired.path, dir.path().join("released.wav"))?;
     println!(
-        "PASS: row artwork, duplicate import, playback/seek, missing-file recovery message preserves current audio, volume, favorite, playlist, search, next/end/repeat, persistence, file release."
+        "PASS: row artwork, duplicate import, playback/seek, missing-file popup, invalid selection preserves current audio, relocated file resumes with identity/favorites/playlists intact, volume, favorite, playlist, search, next/end/repeat, persistence, file release."
     );
     Ok(())
 }

@@ -1,3 +1,4 @@
+import { TourTarget } from "guide.slint";
 import { Theme } from "theme.slint";
 import { NavGlyph } from "glyphs.slint";
 import { ListView } from "std-widgets.slint";
@@ -150,6 +151,7 @@ component TrackItem inherits Rectangle {
 
 component EmptyLibrary inherits Rectangle {
     callback choose-folder;
+    callback folder-area-changed(TourTarget);
     callback import-files;
     callback new-playlist;
     callback import-playlist;
@@ -191,6 +193,9 @@ component EmptyLibrary inherits Rectangle {
                     vertical-stretch: 0;
                     spacing: 9px;
                     Button {
+                        private property <TourTarget> bounds: { x: self.absolute-position.x, y: self.absolute-position.y, width: self.width, height: self.height };
+                        changed bounds => { root.folder-area-changed(self.bounds); }
+                        init => { root.folder-area-changed(self.bounds); }
                         kind: ButtonKind.primary;
                         text: "Choose folder";
                         icon-only: root.condensed && root.compact;
@@ -249,9 +254,9 @@ export component LibraryPage inherits Rectangle {
     callback play-track(int);
     callback toggle-play;
     callback favorite-track(int);
-    callback remove-track(int);
+    callback remove-track(int, string);
     callback add-to-playlist(int, int);
-    callback remove-from-playlist(int);
+    callback remove-from-playlist(int, string);
 
     private property <bool> compact: root.width < 720px;
     /// The narrow floor, where only one action can survive the header row.
@@ -268,11 +273,36 @@ export component LibraryPage inherits Rectangle {
         ? "A focused home for the music already on this device"
         : "\{root.total-tracks} tracks · \{root.album-count} albums · \{root.favorite-count} favorites";
 
+    in property <int> tour-kind;
+    callback tour-area-changed(TourTarget);
+    changed tour-area => { root.tour-area-changed(self.tour-area); }
+    private property <TourTarget> search-area;
+    private property <TourTarget> collections-area;
+    private property <TourTarget> import-area;
+    private property <TourTarget> new-area;
+    private property <TourTarget> folder-area;
+    private property <TourTarget> rows-area;
+    private property <TourTarget> empty-area;
+
+    out property <TourTarget> tour-area: root.tour-kind == 2 && root.has-filter
+        ? { x: root.search-area.x, y: root.search-area.y, width: root.search-area.width, height: root.search-area.height }
+        : root.tour-kind == 3
+        ? { x: root.collections-area.x, y: root.collections-area.y, width: root.collections-area.width, height: root.collections-area.height }
+        : root.tour-kind == 4
+        ? root.new-area
+        : root.tour-kind == 5 && root.tracks.length > 0
+        ? { x: root.rows-area.x, y: root.rows-area.y, width: root.rows-area.width, height: min(52px, root.rows-area.height) }
+        : root.tour-kind == 1 && root.total-tracks > 0
+        ? root.import-area
+        : root.tour-kind == 1 ? root.folder-area
+        : root.total-tracks > 0 ? root.search-area
+        : { x: root.empty-area.x, y: root.empty-area.y, width: root.empty-area.width, height: min(root.empty-area.height, 100px) };
+
     VerticalLayout {
         padding: 0px;
         spacing: root.short ? 8px : 14px;
         Rectangle { height: 0px; }
-        HorizontalLayout {
+        header := HorizontalLayout {
             min-height: 52px;
             max-height: 52px;
             vertical-stretch: 0;
@@ -291,10 +321,14 @@ export component LibraryPage inherits Rectangle {
             // hidden, because every one of these is an entry point the user
             // asked to keep reachable; the labels simply drop away and the
             // title gives up its width instead.
-            if root.page != 2: HorizontalLayout {
+            if root.page != 2: actions := HorizontalLayout {
+
                 vertical-stretch: 0;
                 spacing: 8px;
                 Button {
+                    private property <TourTarget> bounds: { x: self.absolute-position.x, y: self.absolute-position.y, width: self.width, height: self.height };
+                    changed bounds => { root.new-area = self.bounds; }
+                    init => { root.new-area = self.bounds; }
                     kind: root.creating ? ButtonKind.primary : ButtonKind.secondary;
                     text: root.compact ? "New" : "New playlist";
                     label: "Create a playlist";
@@ -311,6 +345,9 @@ export component LibraryPage inherits Rectangle {
                     clicked => { root.import-playlist(); }
                 }
                 if root.total-tracks > 0: Button {
+                    private property <TourTarget> bounds: { x: self.absolute-position.x, y: self.absolute-position.y, width: self.width, height: self.height };
+                    changed bounds => { root.import-area = self.bounds; }
+                    init => { root.import-area = self.bounds; }
                     kind: ButtonKind.primary;
                     text: root.compact ? "Import" : "Import music";
                     label: "Import music";
@@ -321,17 +358,26 @@ export component LibraryPage inherits Rectangle {
                 }
             }
         }
-        if root.total-tracks == 0 && root.page != 2: EmptyLibrary {
+        if root.total-tracks == 0 && root.page != 2: empty := EmptyLibrary {
+            private property <TourTarget> bounds: { x: self.absolute-position.x, y: self.absolute-position.y, width: self.width, height: self.height };
+            changed bounds => { root.empty-area = self.bounds; }
+            init => { root.empty-area = self.bounds; }
+
             vertical-stretch: 1;
             min-height: root.height < 400px ? 112px : 260px;
             compact: root.compact;
             condensed: root.height < 400px;
+            folder-area-changed(area) => { root.folder-area = area; }
             choose-folder => { root.import-files(true); }
             import-files => { root.import-files(false); }
             new-playlist => { root.creating = true; root.playlist-name = ""; }
             import-playlist => { root.import-playlist(); }
         }
-        if root.has-filter: TextField {
+        if root.has-filter: search := TextField {
+            private property <TourTarget> bounds: { x: self.absolute-position.x, y: self.absolute-position.y, width: self.width, height: self.height };
+            changed bounds => { root.search-area = self.bounds; }
+            init => { root.search-area = self.bounds; }
+
             icon: @image-url("icons/search.svg");
             placeholder: root.page == 2 ? "Search your library" : "Filter this collection";
             label: "Search library";
@@ -344,7 +390,11 @@ export component LibraryPage inherits Rectangle {
         // Search is a text view over whichever of the two is active. The two
         // chip rows are mutually exclusive so the control under the search box
         // always means one thing.
-        if root.page == 0: HorizontalLayout {
+        if root.page == 0: collections := HorizontalLayout {
+            private property <TourTarget> bounds: { x: self.absolute-position.x, y: self.absolute-position.y, width: self.width, height: self.height };
+            changed bounds => { root.collections-area = self.bounds; }
+            init => { root.collections-area = self.bounds; }
+
             min-height: 32px;
             max-height: 32px;
             vertical-stretch: 0;
@@ -478,7 +528,11 @@ export component LibraryPage inherits Rectangle {
                 }
             }
         }
-        if root.tracks.length > 0: ListView {
+        if root.tracks.length > 0: rows := ListView {
+            private property <TourTarget> bounds: { x: self.absolute-position.x, y: self.absolute-position.y, width: self.width, height: self.height };
+            changed bounds => { root.rows-area = self.bounds; }
+            init => { root.rows-area = self.bounds; }
+
             vertical-stretch: 1;
             min-height: 80px;
             vertical-scrollbar-policy: ScrollBarPolicy.always-off;
@@ -498,12 +552,12 @@ export component LibraryPage inherits Rectangle {
                 toggle-favorite => { root.favorite-track(track.id); }
                 collect => {
                     if root.playlist-index > 1 {
-                        root.remove-from-playlist(track.id);
+                        root.remove-from-playlist(track.id, track.title);
                     } else {
                         root.pending-add-id = track.id;
                     }
                 }
-                remove => { root.remove-track(track.id); }
+                remove => { root.remove-track(track.id, track.title); }
             }
         }
         if root.tracks.length == 0 && (root.total-tracks > 0 || root.page == 2): VerticalLayout {

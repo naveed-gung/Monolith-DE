@@ -193,6 +193,40 @@ impl Library {
         )?;
         Ok(true)
     }
+    /// Reconnect an explicitly chosen missing file without changing track identity.
+    pub fn relink(&self, id: i64, path: &Path) -> Result<()> {
+        let old: String = self
+            .0
+            .query_row("SELECT path FROM tracks WHERE id=?1", [id], |r| r.get(0))?;
+        if Path::new(&old).is_file() {
+            return Err("This song's file is already available. Play it from the library.".into());
+        }
+        let path = path.canonicalize()?;
+        if !path.is_file() || !supported(&path) {
+            return Err("Choose a supported audio file for this song.".into());
+        }
+        let text = path.to_str().ok_or("File path is not valid Unicode")?;
+        if self
+            .0
+            .query_row(
+                "SELECT 1 FROM tracks WHERE path=?1 AND id!=?2",
+                params![text, id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some()
+        {
+            return Err("That file already belongs to another song in your library.".into());
+        }
+        let file = lofty::probe::Probe::open(&path)?
+            .options(lofty::config::ParseOptions::new().read_cover_art(false))
+            .read()?;
+        self.0.execute(
+            "UPDATE tracks SET path=?1,seconds=?2 WHERE id=?3",
+            params![text, file.properties().duration().as_secs_f64(), id],
+        )?;
+        Ok(())
+    }
     pub fn tracks(&self, playlist: i64) -> Result<Vec<Track>> {
         let mut q=self.0.prepare("SELECT id,path,title,artist,album,seconds,favorite FROM tracks
             WHERE ?1=0 OR (?1=-1 AND favorite=1) OR id IN(SELECT track_id FROM playlist_tracks WHERE playlist_id=?1)
@@ -531,6 +565,34 @@ mod tests {
             db.playlists()?.is_empty(),
             "a playlist with no matches must not be left behind"
         );
+        Ok(())
+    }
+    #[test]
+    fn relink_rejects_bad_or_duplicate_files_without_changing_the_entry() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db = Library::open(&dir.path().join("library.sqlite3"))?;
+        let missing = dir.path().join("missing.wav");
+        let other = dir.path().join("other.wav");
+        std::fs::write(&other, b"audio")?;
+        let other = other.canonicalize()?;
+        db.0.execute("INSERT INTO tracks(path,title,artist,album,seconds,favorite) VALUES(?1,'Kept','A','LP',2,1)", [missing.to_str().unwrap()])?;
+        db.0.execute(
+            "INSERT INTO tracks(path,title,artist,album,seconds) VALUES(?1,'Other','A','LP',2)",
+            [other.to_str().unwrap()],
+        )?;
+        db.create_playlist("Evening")?;
+        let playlist = db.playlists()?[0].0;
+        db.add_to_playlist(playlist, 1)?;
+        let invalid = dir.path().join("invalid.wav");
+        std::fs::write(&invalid, b"not audio")?;
+        for path in [&missing, &other, &invalid] {
+            assert!(db.relink(1, path).is_err());
+        }
+        let track = &db.tracks(playlist)?[0];
+        assert_eq!(track.id, 1);
+        assert_eq!(track.path, missing.to_str().unwrap());
+        assert!(track.favorite);
+        assert_eq!(std::fs::read(other)?, b"audio");
         Ok(())
     }
     #[test]

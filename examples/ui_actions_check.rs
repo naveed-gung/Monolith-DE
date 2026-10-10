@@ -21,6 +21,15 @@ fn click(ui: &AppWindow, x: f32, y: f32) {
     }
 }
 
+fn key(ui: &AppWindow, text: slint::SharedString) {
+    for event in [
+        slint::platform::WindowEvent::KeyPressed { text: text.clone() },
+        slint::platform::WindowEvent::KeyReleased { text },
+    ] {
+        ui.window().dispatch_event(event);
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui = AppWindow::new()?;
     ui.set_reduce_motion(true);
@@ -47,6 +56,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let played = Rc::new(Cell::new(-1));
     let favorites = Rc::new(Cell::new(0));
     let removals = Rc::new(Cell::new(0));
+    let playlist_removals = Rc::new(Cell::new(0));
+    let located = Rc::new(Cell::new(0));
+    let count = playlist_removals.clone();
+    ui.on_remove_from_playlist(move |id, playlist| {
+        assert_eq!(playlist, 3);
+        assert_eq!(id, 1);
+        count.set(count.get() + 1);
+    });
+    let count = located.clone();
+    ui.on_locate_track(move |id| {
+        assert_eq!(id, 2);
+        count.set(count.get() + 1);
+    });
     let downloads = Rc::new(Cell::new(0));
     let cancelled = Rc::new(Cell::new(0));
     let count = toggles.clone();
@@ -100,7 +122,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         click(&ui, 1230., 234.); // Remove action.
         assert_eq!(toggles.get(), before, "row actions never toggle playback");
         assert_eq!(favorites.get(), 1, "favorite owns its click");
-        assert_eq!(removals.get(), 1, "remove owns its click");
+        assert_eq!(removals.get(), 0, "removal waits for confirmation");
+        click(&ui, 450., 234.);
+        assert_eq!(toggles.get(), before, "warning blocks underlying playback");
+        key(&ui, "\n".into()); // Safe default is Cancel.
+        assert_eq!(removals.get(), 0);
+        click(&ui, 1230., 234.);
+        key(&ui, slint::platform::Key::Tab.into());
+        key(&ui, "\n".into());
+        assert_eq!(removals.get(), 1, "confirm removes exactly once");
+        ui.set_playlists(ModelRc::new(VecModel::from(vec![
+            "All music".into(),
+            "Favorites".into(),
+            "Evening".into(),
+        ])));
+        ui.set_playlist_ids(ModelRc::new(VecModel::from(vec![0, -1, 3])));
+        ui.set_playlist_index(2);
+        click(&ui, 1182., 234.);
+        key(&ui, slint::platform::Key::Escape.into());
+        assert_eq!(
+            playlist_removals.get(),
+            0,
+            "Escape cancels playlist removal"
+        );
+        click(&ui, 1182., 234.);
+        key(&ui, slint::platform::Key::Backtab.into());
+        key(&ui, " ".into());
+        assert_eq!(
+            playlist_removals.get(),
+            1,
+            "playlist removal requires confirmation"
+        );
+        ui.set_unavailable_title("Moved fixture".into());
+        ui.set_unavailable_path("Music/moved.wav".into());
+        ui.set_unavailable_track_id(2);
+        key(&ui, "\n".into());
+        assert_eq!(located.get(), 0, "missing-file popup defaults to Cancel");
+        ui.set_unavailable_track_id(2);
+        key(&ui, slint::platform::Key::Tab.into());
+        key(&ui, "\n".into());
+        assert_eq!(located.get(), 1, "Locate routes the exact missing track");
+        assert_eq!(ui.get_unavailable_track_id(), -1);
         click(&ui, 46., 776.);
         assert!(ui.get_player_open(), "artwork opens the expanded player");
         ui.set_player_open(false);
@@ -118,7 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             assert_eq!(cancelled.get(), 1, "active download offers cancellation");
             assert_eq!(downloads.get(), 1, "active job cannot submit twice");
             println!(
-                "PASS: whole-row title/detail/gap/duration playback, separate row actions, keyboard pause, empty URL guard, download and cancel callbacks; no network."
+                "PASS: whole-row title/detail/gap/duration playback, separate row actions, Cancel/Remove warnings, playlist confirmation, Locate popup, keyboard pause, empty URL guard, download and cancel callbacks; no network."
             );
             slint::quit_event_loop().unwrap();
         });

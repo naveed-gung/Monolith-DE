@@ -1,15 +1,17 @@
 import { Theme } from "theme.slint";
 import { Button, ButtonKind } from "controls.slint";
 
-export struct GuideStep { title: string, body: string, page: int }
+export struct TourTarget { x: length, y: length, width: length, height: length }
+export struct GuideStep { title: string, body: string, page: int, target: int }
 
-// The shell owns the blocking scrim; this card anchors to the current nav item.
+// The shell owns input isolation; each card follows its real layout target.
 export component CoachMark inherits Rectangle {
     in property <bool> shown: false;
     in property <[GuideStep]> steps;
     in-out property <int> step: 0;
     callback step-changed(int);
-    in property <length> anchor-y;
+    in property <TourTarget> target;
+    in property <bool> contextual;
     in property <length> rail-width;
     in property <length> viewport-width;
     in property <length> viewport-height;
@@ -19,13 +21,19 @@ export component CoachMark inherits Rectangle {
     private property <bool> last: root.current >= root.steps.length - 1;
     visible: root.shown;
     z: 30;
-    width: min(360px, root.viewport-width - root.rail-width - 26px);
+    width: min(360px, root.viewport-width - (root.contextual ? 24px : root.rail-width + 26px));
     height: content.preferred-height;
-    x: root.rail-width + 14px;
-    // Modal content may cover the disabled header/player. This lets the tail
-    // meet its nav row even at the 420x380 floor instead of pointing elsewhere.
-    y: clamp(root.anchor-y - root.height / 2, 12px,
-        max(12px, root.viewport-height - root.height - 12px));
+    private property <bool> below: root.target.y + root.target.height + root.height + 20px <= root.viewport-height;
+    private property <bool> above: root.target.y - root.height >= 20px;
+    x: root.contextual ? clamp(root.target.x + root.target.width / 2 - root.width / 2, 12px,
+        root.viewport-width - root.width - 12px) : root.rail-width + 14px;
+    y: root.contextual
+        ? (root.below ? root.target.y + root.target.height + 8px
+            : root.above ? root.target.y - root.height - 8px
+            : root.target.y > root.viewport-height - root.target.y - root.target.height ? 12px : root.viewport-height - root.height - 12px)
+        : clamp(root.target.y + root.target.height / 2 - root.height / 2, 12px,
+            max(12px, root.viewport-height - root.height - 12px));
+    animate x, y { duration: root.shown ? Theme.normal : 0ms; easing: ease-out; }
     changed step => { root.step-changed(root.current); }
     changed shown => { if root.shown { next.focus(); } }
     public function focus-primary() { next.focus(); }
@@ -57,13 +65,20 @@ export component CoachMark inherits Rectangle {
         return accept;
     }
 
-    Path {
-        x: -8px; y: clamp(root.anchor-y - root.y - 8px, 12px, root.height - 28px);
+    if !root.contextual: Path {
+        x: -8px; y: clamp(root.target.y + root.target.height / 2 - root.y - 8px, 12px, root.height - 28px);
         width: 10px; height: 16px;
         viewbox-width: 10; viewbox-height: 16;
         fill: Theme.raised; stroke: Theme.border; stroke-width: 1px;
         MoveTo { x: 10; y: 0; } LineTo { x: 1; y: 8; }
         LineTo { x: 10; y: 16; } Close {}
+    }
+    if root.contextual && (root.below || root.above): Path {
+        x: clamp(root.target.x + root.target.width / 2 - root.x - 8px, 16px, root.width - 32px);
+        y: root.below ? -8px : root.height - 1px;
+        width: 16px; height: 10px; viewbox-width: 16; viewbox-height: 10;
+        fill: Theme.raised; stroke: Theme.border; stroke-width: 1px;
+        commands: root.below ? "M0 10 L8 1 L16 10 Z" : "M0 0 L8 9 L16 0 Z";
     }
     Rectangle {
         border-radius: Theme.radius-panel;
@@ -72,9 +87,10 @@ export component CoachMark inherits Rectangle {
         accessible-role: text;
         accessible-label: "Monolith guide";
         // Clicking the card body never falls through to a disabled page.
-        TouchArea { clicked => { next.focus(); } }
+        TouchArea { clicked => { next.focus(); } scroll-event(event) => { return accept; } }
         content := VerticalLayout {
-            padding: 18px; spacing: 12px;
+            padding: root.viewport-height < 500px ? 12px : 18px;
+            spacing: root.viewport-height < 500px ? 6px : 12px;
             HorizontalLayout {
                 spacing: 12px; vertical-stretch: 0;
                 Text {

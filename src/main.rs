@@ -207,9 +207,36 @@ fn run() -> Result<()> {
     bind!(on_request_thumbnail, Thumbnail, i64);
     bind!(on_favorite_track, Favorite, i64);
     bind!(on_remove_track, Remove, i64);
-    bind!(on_remove_from_playlist, RemoveFromPlaylist, i64);
+    {
+        let tx = tx.clone();
+        app.on_remove_from_playlist(move |id, playlist| {
+            let _ = tx.send(Command::RemoveFromPlaylist(id as i64, playlist as i64));
+        });
+    }
     bind!(on_shuffle_changed, Shuffle, bool);
     bind!(on_repeat_changed, Repeat, i32);
+    {
+        let tx = tx.clone();
+        let weak = app.as_weak();
+        app.on_locate_track(move |id| {
+            let sender = tx.clone();
+            let weak = weak.clone();
+            std::thread::spawn(move || {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("Locate this song's audio file")
+                    .add_filter("Audio", EXTENSIONS)
+                    .pick_file()
+                {
+                    let _ = sender.send(Command::Relink(id as i64, path));
+                } else {
+                    message(
+                        &weak,
+                        "File selection cancelled. The song is unchanged.".into(),
+                    );
+                }
+            });
+        });
+    }
     {
         let tx = tx.clone();
         app.on_filter_changed(move |index, query| {
