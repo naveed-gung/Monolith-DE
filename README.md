@@ -44,6 +44,8 @@ live locally in SQLite. No account, cloud sync, or telemetry service.
 
 <img src="docs/img/downloads-guide.png" width="1000" alt="Downloads tour highlighting the link field at normal brightness while background input stays blocked">
 
+<img src="docs/img/settings-guide.png" width="1000" alt="Settings tour with a precisely fitted spotlight around the download folder chooser">
+
 </details>
 
 These are captures of the rendered Windows interface. Populated screenshots use
@@ -235,6 +237,12 @@ remain deferred under the 100 MB download cap.
 Physical DPI transitions, screen-reader announcements, large-library performance,
 real download peaks and Linux runtime still need verification. See the examples
 for executable checks rather than treating screenshots as full feature coverage.
+
+On Windows, `python tools/check-guide-hover.py target/release/monolith-desktop.exe`
+checks actual on-screen partial repaint during muted fixture playback. It walks
+all 15 tour steps with solid and acrylic rendering, checks the card's action row,
+and rejects unexpected changes outside the card. Python with Pillow is needed
+only for this optional development check; test data and captures stay in `.work/`.
 
 ## One identity, two apps
 

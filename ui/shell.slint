@@ -535,7 +535,8 @@ export component AppShell inherits FocusScope {
         repeat-changed(value) => { root.repeat-mode = value; root.repeat-changed(value); }
         hide-to-tray => { root.hide-to-tray(); }
     }
-    // Reverse inner winding cuts a real hole through a viewport-sized mask.
+    // Non-overlapping rectangles leave the target bright. The software renderer
+    // clips compound Paths incorrectly during partial redraw (hover/animation).
     // A separate transparent shield blocks input inside the bright region too.
     private property <length> spot-x: clamp(root.guide-target.x, 0px, root.width);
     private property <length> spot-y: clamp(root.guide-target.y, 0px, root.height);
@@ -544,11 +545,18 @@ export component AppShell inherits FocusScope {
     out property <TourTarget> guide-spotlight-area: { x: root.spot-x, y: root.spot-y, width: root.spot-w, height: root.spot-h };
     if root.guide-open && !root.dialog-open: Rectangle {
         z: 20; width: root.width; height: root.height; accessible-role: none;
-        Path {
-            width: root.width; height: root.height;
-            viewbox-width: root.width / 1px; viewbox-height: root.height / 1px;
-            fill: Theme.scrim;
-            commands: "M0 0 H\{root.width / 1px} V\{root.height / 1px} H0 Z M\{root.spot-x / 1px} \{root.spot-y / 1px} V\{(root.spot-y + root.spot-h) / 1px} H\{(root.spot-x + root.spot-w) / 1px} V\{root.spot-y / 1px} Z";
+        Rectangle { x: 0px; y: 0px; width: root.width; height: root.spot-y; background: Theme.scrim; }
+        Rectangle {
+            x: 0px; y: root.spot-y + root.spot-h; width: root.width;
+            height: root.height - self.y; background: Theme.scrim;
+        }
+        Rectangle {
+            x: 0px; y: root.spot-y; width: root.spot-x; height: root.spot-h;
+            background: Theme.scrim;
+        }
+        Rectangle {
+            x: root.spot-x + root.spot-w; y: root.spot-y;
+            width: root.width - self.x; height: root.spot-h; background: Theme.scrim;
         }
         Rectangle {
             x: root.spot-x; y: root.spot-y; width: root.spot-w; height: root.spot-h;

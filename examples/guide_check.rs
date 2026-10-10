@@ -140,6 +140,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             image::save_buffer(&path, pixels.as_bytes(), pixels.width(), pixels.height(), image::ColorType::Rgba8).unwrap();
             let target = ui.get_guide_target();
             let card = ui.get_guide_card_area();
+            if ui.get_guide_step() == 13 {
+                assert!(target.width <= 280., "appearance spotlight fits its three choices");
+            }
+            if ui.get_guide_step() == 14 {
+                assert!(target.width <= 130. && target.height <= 52., "folder spotlight fits the actual chooser, not the stretched row");
+            }
             assert!(target.width > 0. && target.height > 0., "step has a real target");
             assert!(target.x >= 0. && target.x + target.width <= width + 1., "target is horizontally in view; step {}", ui.get_guide_step());
             assert!(target.y >= 0. && target.y + target.height <= height + 1., "target is vertically in view; step {}", ui.get_guide_step());

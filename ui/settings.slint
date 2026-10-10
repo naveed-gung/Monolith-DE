@@ -10,6 +10,9 @@ component SettingRow inherits Rectangle {
     in property <string> action;
     in property <string> action-label;
     in property <bool> enabled: true;
+    in property <int> tour-step: -1;
+    in property <length> scroll-offset;
+    callback action-area-changed(TourTarget);
     callback clicked;
     min-height: 58px;
     vertical-stretch: 0;
@@ -23,7 +26,16 @@ component SettingRow inherits Rectangle {
             Text { text: root.label; color: Theme.foreground; font-size: Theme.type-body; font-weight: 500; wrap: word-wrap; }
             Text { text: root.value; color: Theme.muted; font-size: Theme.type-label; wrap: word-wrap; }
         }
-        Button { text: root.action; enabled: root.enabled; accessible-label: root.action-label; clicked => { root.clicked(); } }
+        Button {
+            text: root.action; enabled: root.enabled; accessible-label: root.action-label;
+            TourAnchor {
+                step: root.tour-step; offset: root.scroll-offset;
+                viewport-width: root.width; viewport-height: root.height;
+                target-width: parent.width; target-height: parent.height;
+                measure(area) => { root.action-area-changed(area); }
+            }
+            clicked => { root.clicked(); }
+        }
     }
 }
 
@@ -117,20 +129,21 @@ export component SettingsPage inherits Rectangle {
                             spacing: 7px;
                             TourAnchor {
                                 step: root.tour-kind; viewport-width: root.width; viewport-height: root.height; offset: scroll.viewport-y;
-                                target-width: parent.width; target-height: parent.height;
+                                target-width: system-chip.width + light-chip.width + dark-chip.width + 14px;
+                                target-height: parent.height;
                                 measure(area) => { root.appearance-area = area; }
                             }
-                            Chip {
+                            system-chip := Chip {
                                 text: "System";
                                 selected: root.theme-follow-system;
                                 clicked => { root.theme-follow-system = true; root.theme-changed(0); }
                             }
-                            Chip {
+                            light-chip := Chip {
                                 text: "Light";
                                 selected: !root.theme-follow-system && root.light;
                                 clicked => { root.theme-follow-system = false; root.light = true; root.theme-changed(1); }
                             }
-                            Chip {
+                            dark-chip := Chip {
                                 text: "Dark";
                                 selected: !root.theme-follow-system && !root.light;
                                 clicked => { root.theme-follow-system = false; root.light = false; root.theme-changed(2); }
@@ -206,10 +219,10 @@ export component SettingsPage inherits Rectangle {
                         Rectangle { height: 1px; background: Theme.border; }
                         SettingRow {
                             label: "Download folder";
-                            TourAnchor {
-                                step: root.tour-kind; viewport-width: root.width; viewport-height: root.height; offset: scroll.viewport-y;
-                                target-width: parent.width; target-height: parent.height;
-                                measure(area) => { root.folder-area = area; }
+                            tour-step: root.tour-kind; scroll-offset: scroll.viewport-y;
+                            action-area-changed(area) => {
+                                root.folder-area = { x: area.x - 4px, y: area.y - 4px,
+                                    width: area.width + 8px, height: area.height + 8px };
                             }
                             value: root.download-folder;
                             action: "Choose";
