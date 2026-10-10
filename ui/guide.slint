@@ -1,170 +1,126 @@
 import { Theme } from "theme.slint";
 import { Button, ButtonKind } from "controls.slint";
 
-/// One coaching card. `page` is the sidebar page the step is talking about, so
-/// advancing the tour can move the app to that section and the card follows.
-export struct GuideStep {
-    title: string,
-    body: string,
-    page: int,
-}
+export struct GuideStep { title: string, body: string, page: int }
 
-/// A hint anchored beside the sidebar item it is talking about.
-///
-/// This is a coach mark, not a modal: no scrim, no block on the rest of the
-/// window, and the app stays usable while it is up. It sits just to the right
-/// of the rail and points back at the nav row it describes.
+// The shell owns the blocking scrim; this card anchors to the current nav item.
 export component CoachMark inherits Rectangle {
     in property <bool> shown: false;
     in property <[GuideStep]> steps;
     in-out property <int> step: 0;
-    // Fired for Next, Back and the arrow keys alike, so the shell can move the
-    // app to the page the new step is about.
     callback step-changed(int);
-    // Vertical anchor, supplied by the shell as the centre of the nav row.
-    in property <length> anchor-y: 120px;
-    in property <length> rail-width: 72px;
-    in property <bool> compact: false;
-    // A component root has no parent to measure, so the shell hands over the
-    // window size plus the two bands the card must never cover: the page
-    // header above it and the player bar below.
-    in property <length> viewport-width: 1280px;
-    in property <length> viewport-height: 820px;
-    in property <length> header-height: 120px;
-    in property <length> footer-inset: 0px;
+    in property <length> anchor-y;
+    in property <length> rail-width;
+    in property <length> viewport-width;
+    in property <length> viewport-height;
     callback closed;
     callback finished;
-
-    // Clamp so a stale step can never blank the card.
     private property <int> current: clamp(root.step, 0, max(root.steps.length - 1, 0));
     private property <bool> last: root.current >= root.steps.length - 1;
-    // Room beside the rail, so the card sits next to what it describes. The
-    // floor keeps a legible card when the rail is expanded on a narrow window
-    // and the x clamp below slides it back on screen rather than off it.
-    private property <length> card-width: min(340px, max(200px, root.viewport-width - root.rail_width - 26px));
-    // Centred on the nav row, then pushed clear of the header and the player.
-    // Clamping the centre rather than the top is what keeps the tail honest.
-    // `clamp` takes the value first, then the low and high bounds.
-    private property <length> card-y: clamp(
-        root.anchor_y - self.height / 2,
-        root.header_height,
-        max(root.header_height, root.viewport_height - root.footer_inset - self.height - 12px)
-    );
-
     visible: root.shown;
     z: 30;
-    changed step => { root.step-changed(self.step); }
-    // The card is placed from its own size, so it starts empty and grows.
-    width: root.card-width;
-    height: card.preferred-height;
-    x: min(root.rail_width + 14px, root.viewport_width - root.card_width - 12px);
-    y: root.card-y;
-
-    // A real triangle also renders correctly without GPU rotation support.
-    Path {
-        x: -7px;
-        y: clamp(root.anchor-y - root.card-y - 7px, 10px, max(10px, root.height - 24px));
-        width: 9px; height: 14px;
-        viewbox-width: 9; viewbox-height: 14;
-        fill: Theme.raised;
-        stroke: Theme.border; stroke-width: 1px;
-        MoveTo { x: 9; y: 0; }
-        LineTo { x: 1; y: 7; }
-        LineTo { x: 9; y: 14; }
-        Close {}
+    width: min(360px, root.viewport-width - root.rail-width - 26px);
+    height: content.preferred-height;
+    x: root.rail-width + 14px;
+    // Modal content may cover the disabled header/player. This lets the tail
+    // meet its nav row even at the 420x380 floor instead of pointing elsewhere.
+    y: clamp(root.anchor-y - root.height / 2, 12px,
+        max(12px, root.viewport-height - root.height - 12px));
+    changed step => { root.step-changed(root.current); }
+    changed shown => { if root.shown { next.focus(); } }
+    public function focus-primary() { next.focus(); }
+    public function handle-key(event: KeyEvent) -> EventResult {
+        if event.text == Key.Escape { root.closed(); }
+        else if event.text == Key.RightArrow {
+            if root.last { root.finished(); } else { root.step = root.current + 1; }
+        } else if event.text == Key.LeftArrow {
+            if root.current > 0 { root.step = root.current - 1; }
+        } else if event.text == Key.Tab || event.text == Key.Backtab {
+            if event.modifiers.shift || event.text == Key.Backtab {
+                if next.has-focus { cancel.focus(); }
+                else if cancel.has-focus && root.current > 0 { back.focus(); }
+                else { next.focus(); }
+            } else {
+                if next.has-focus {
+                    if root.current > 0 { back.focus(); } else { cancel.focus(); }
+                } else if back.has-focus { cancel.focus(); }
+                else { next.focus(); }
+            }
+        } else if event.text == " " || event.text == "\n" {
+            if cancel.has-focus { root.closed(); }
+            else if back.has-focus && root.current > 0 { root.step = root.current - 1; }
+            else if root.last { root.finished(); }
+            else { root.step = root.current + 1; }
+        }
+        // Consume every key: search, page shortcuts and player cannot activate
+        // beneath the scrim, including when focus predates the guide opening.
+        return accept;
     }
 
-    card := Rectangle {
-        width: parent.width;
-        height: parent.height;
+    Path {
+        x: -8px; y: clamp(root.anchor-y - root.y - 8px, 12px, root.height - 28px);
+        width: 10px; height: 16px;
+        viewbox-width: 10; viewbox-height: 16;
+        fill: Theme.raised; stroke: Theme.border; stroke-width: 1px;
+        MoveTo { x: 10; y: 0; } LineTo { x: 1; y: 8; }
+        LineTo { x: 10; y: 16; } Close {}
+    }
+    Rectangle {
         border-radius: Theme.radius-panel;
         background: Theme.raised;
-        border-width: 1px;
-        border-color: Theme.border;
-
-        // Escape and the arrow keys move through the tour, and focus cannot
-        // wander out while the hint is up.
-        focus := FocusScope {
-            width: parent.width;
-            height: parent.height;
-            key-pressed(event) => {
-                if event.text == Key.Escape { root.closed(); return accept; }
-                if event.text == Key.RightArrow {
-                    if root.last { root.finished(); } else { root.step = root.current + 1; }
-                    return accept;
-                }
-                if event.text == Key.LeftArrow {
-                    if root.current > 0 { root.step = root.current - 1; }
-                    return accept;
-                }
-                return reject;
-            }
-        }
-
-        VerticalLayout {
-            padding: 18px;
-            spacing: 10px;
-
+        border-width: 1px; border-color: Theme.border;
+        accessible-role: text;
+        accessible-label: "Monolith guide";
+        // Clicking the card body never falls through to a disabled page.
+        TouchArea { clicked => { next.focus(); } }
+        content := VerticalLayout {
+            padding: 18px; spacing: 12px;
             HorizontalLayout {
-                vertical-stretch: 0;
-                spacing: 10px;
-                cross-axis-alignment: start;
+                spacing: 12px; vertical-stretch: 0;
                 Text {
+                    text: "QUICK TOUR"; color: Theme.accent;
+                    font-size: Theme.type-caption; font-weight: 600;
                     horizontal-stretch: 1;
-                    text: root.steps.length == 0 ? "" : root.steps[root.current].title;
-                    color: Theme.foreground;
-                    font-size: Theme.type-body;
-                    font-weight: 700;
-                    wrap: word-wrap;
                 }
                 Text {
-                    text: root.steps.length == 0 ? "" : (root.current + 1) + "/" + root.steps.length;
-                    color: Theme.muted;
-                    font-size: Theme.type-label;
+                    text: (root.current + 1) + " / " + root.steps.length;
+                    color: Theme.muted; font-size: Theme.type-caption;
                 }
             }
-
+            Text {
+                text: root.steps.length == 0 ? "" : root.steps[root.current].title;
+                color: Theme.foreground; font-size: Theme.type-heading;
+                font-weight: 600; wrap: word-wrap;
+                accessible-live-region: polite;
+            }
             Text {
                 text: root.steps.length == 0 ? "" : root.steps[root.current].body;
-                color: Theme.secondary;
-                font-size: Theme.type-label;
-                wrap: word-wrap;
+                color: Theme.secondary; font-size: Theme.type-label; wrap: word-wrap;
             }
-
-            // Progress as a row of segments that fill as Next is pressed, which
-            // reads faster at a glance than "2 of 4".
             HorizontalLayout {
-                vertical-stretch: 0;
-                spacing: 4px;
+                spacing: 4px; vertical-stretch: 0;
                 for index in root.steps.length: Rectangle {
-                    width: index <= root.current ? 18px : 8px;
-                    height: 4px;
-                    border-radius: 2px;
+                    height: 3px; border-radius: 1.5px;
                     background: index <= root.current ? Theme.accent : Theme.border;
-                    animate background, width { duration: Theme.fast; }
+                    animate background { duration: Theme.fast; }
                 }
-                Rectangle { horizontal-stretch: 1; }
             }
-
             HorizontalLayout {
-                vertical-stretch: 0;
-                spacing: 8px;
-                // Back sits beside Next rather than hiding behind the arrow
-                // keys, which most people never press.
-                if root.current > 0: Button {
-                    kind: ButtonKind.ghost;
-                    text: "Back";
+                spacing: 6px; vertical-stretch: 0;
+                back := Button {
+                    kind: ButtonKind.ghost; text: "Back";
+                    enabled: root.current > 0;
                     clicked => { root.step = root.current - 1; }
                 }
-                Button {
-                    kind: ButtonKind.ghost;
-                    text: "Cancel";
+                cancel := Button {
+                    kind: ButtonKind.ghost; text: "Close";
+                    label: "Close guide";
                     clicked => { root.closed(); }
                 }
                 Rectangle { horizontal-stretch: 1; }
-                Button {
+                next := Button {
                     kind: ButtonKind.primary;
-                    text: root.last ? "Finish" : "Next";
+                    text: root.last ? "Done" : "Next";
                     clicked => {
                         if root.last { root.finished(); }
                         else { root.step = root.current + 1; }

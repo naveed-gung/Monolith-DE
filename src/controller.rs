@@ -329,7 +329,18 @@ impl Worker {
             .iter()
             .find(|t| t.id == id)
             .ok_or("Track is no longer in the library")?;
-        let decoder = Decoder::try_from(std::fs::File::open(&t.path)?)?;
+        let file = std::fs::File::open(&t.path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                format!(
+                    "\"{}\" is unavailable. Restore the file or import its new folder. Saved path: {}",
+                    t.title,
+                    t.path
+                )
+            } else {
+                format!("Cannot open \"{}\": {error}", t.title)
+            }
+        })?;
+        let decoder = Decoder::try_from(file)?;
         let duration = decoder
             .total_duration()
             .map_or(t.seconds, |d| d.as_secs_f64());

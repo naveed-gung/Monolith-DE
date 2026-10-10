@@ -1,145 +1,24 @@
-// Morphing sidebar glyphs.
-//
-// The nav icons used to be SVG images that grew slightly on hover. That is a
-// scale, not a state change, and it read as a generic "alive" wobble. Each
-// glyph here is drawn from shapes instead, because Slint cannot interpolate
-// between two vector paths: an image cross-fade is a swap, not a morph.
-//
-// `active` is the animated 0..1 the click drives. Every property below moves
-// continuously between the two states, so there is no frame at which the icon
-// jumps. Only the two diagonal glyphs need tiny Paths; others use rectangles.
-
 import { Theme } from "theme.slint";
 
-// Shared 24x24 box. Everything is drawn in these units and the parent scales
-// the whole component, so a glyph never has to know its pixel size.
-component GlyphBox inherits Rectangle {
-    in property <int> kind;
-    in property <float> active;
-    in property <color> tint;
-    width: 24px;
-    height: 24px;
-
-    // A 2 px stroke at this size reads as the same weight as the old 1.5 px
-    // SVG outlines without the scaling artefacts.
-    private property <float> unit: root.width / 24px;
-
-    // Library: upright album spines, retaining their silhouette during motion.
-    if root.kind == 0: Rectangle {
-        for spine[index] in 3: Rectangle {
-            x: (4px + index * 6px) * root.unit;
-            y: (5px - root.active * (index == 1 ? 1px : 0px)) * root.unit;
-            width: 4px * root.unit;
-            height: (15px + root.active * (index == 1 ? 2px : 0px)) * root.unit;
-            border-width: 1.6px * root.unit;
-            border-radius: 1px * root.unit;
-            border-color: root.tint;
-            Rectangle {
-                x: 1px * root.unit; y: 4px * root.unit;
-                width: 2px * root.unit; height: 1.4px * root.unit;
-                background: root.tint;
-            }
-        }
-    }
-
-    // Songs keeps the same connected note at every hover phase.
-    if root.kind == 1: Rectangle {
-        x: 3px * root.unit;
-        y: (3px - root.active * 1px) * root.unit;
-        width: 18px * root.unit; height: 18px * root.unit;
-        Rectangle { x: 2px * root.unit; y: 12px * root.unit; width: 5px * root.unit; height: 4px * root.unit; border-radius: 2.5px * root.unit; background: root.tint; }
-        Rectangle { x: 11px * root.unit; y: 10px * root.unit; width: 5px * root.unit; height: 4px * root.unit; border-radius: 2.5px * root.unit; background: root.tint; }
-        Rectangle { x: 6px * root.unit; y: 4px * root.unit; width: 1.6px * root.unit; height: 10px * root.unit; background: root.tint; }
-        Rectangle { x: 15px * root.unit; y: 2px * root.unit; width: 1.6px * root.unit; height: 10px * root.unit; background: root.tint; }
-        Path {
-            width: root.width; height: root.height;
-            viewbox-width: 18; viewbox-height: 18;
-            stroke: root.tint; stroke-width: 1.6px;
-            MoveTo { x: 6.8; y: 4.8; } LineTo { x: 15.8; y: 2.8; }
-        }
-    }
-
-    // Search stays a circular magnifying glass. Lens and handle move together.
-    if root.kind == 2: Rectangle {
-        x: (3px - root.active * 0.5px) * root.unit;
-        y: (3px - root.active * 0.5px) * root.unit;
-        width: (12px + root.active * 1px) * root.unit;
-        height: self.width;
-        border-radius: self.width / 2;
-        border-width: 1.8px * root.unit;
-        border-color: root.tint;
-    }
-    if root.kind == 2: Path {
-        width: root.width; height: root.height;
-        viewbox-width: 24; viewbox-height: 24;
-        stroke: root.tint; stroke-width: 1.8px;
-        MoveTo { x: 13.3; y: 13.3; }
-        LineTo { x: 20; y: 20; }
-    }
-
-    // Arrow coordinates move directly; rotation is unsupported by the software
-    // renderer. The head stays above the tray at every intermediate state.
-    if root.kind == 3: Path {
-        width: root.width; height: root.height;
-        viewbox-width: 24; viewbox-height: 24;
-        stroke: root.tint; stroke-width: 1.8px;
-        MoveTo { x: 12; y: 3 + 2 * root.active; }
-        LineTo { x: 12; y: 15 + 2 * root.active; }
-        MoveTo { x: 7; y: 10 + 2 * root.active; }
-        LineTo { x: 12; y: 15 + 2 * root.active; }
-        LineTo { x: 17; y: 10 + 2 * root.active; }
-        MoveTo { x: 4; y: 17; }
-        LineTo { x: 4; y: 21; }
-        LineTo { x: 20; y: 21; }
-        LineTo { x: 20; y: 17; }
-    }
-
-    // ---- 4: Settings. Knobs slide to the high end. -----------------------
-    if root.kind == 4: Rectangle {
-        x: (3px * root.unit);
-        y: (3px * root.unit);
-        width: (18px * root.unit);
-        height: (18px * root.unit);
-        for track[index] in 3: Rectangle {
-            x: (0px * root.unit);
-            y: (2px * root.unit) + index * (7px * root.unit);
-            width: (18px * root.unit);
-            height: (2px * root.unit);
-            border-radius: (1px * root.unit);
-            background: root.tint;
-            opacity: 0.55;
-        }
-        for knob[index] in 3: Rectangle {
-            // The knob travels the full length of its track. Each starts at a
-            // different place, so the three read as independent controls.
-            x: (1px * root.unit) + ((13px * root.unit) - index * (3px * root.unit)) * root.active;
-            y: (1px * root.unit) + index * (7px * root.unit);
-            width: (4px * root.unit);
-            height: (4px * root.unit);
-            border-radius: (2px * root.unit);
-            background: root.tint;
-        }
-    }
-}
-
-/// The glyph a nav row shows, sized and tinted to match the row's icon.
+// Shared SVG geometry for navigation and artwork placeholders. Hover changes
+// tint only, preserving the icon's shape at every renderer and DPI.
 export component NavGlyph inherits Rectangle {
     in property <int> kind;
-    // Animated 0..1. Set it once and let the easing do the rest.
+    // Retain the old state input for callers; it never deforms the SVG artwork.
     in-out property <float> morph: 0;
-    // In-out rather than in, because the tint is animated: the accent has to
-    // cross-fade with the morph rather than snapping to it.
     in-out property <color> tint: Theme.secondary;
-
     width: 20px;
     height: 20px;
-    // Rectangle coordinates and Path viewboxes both follow the requested size.
-    inner := GlyphBox {
-        width: root.width;
-        height: root.height;
-        kind: root.kind;
-        active: root.morph;
-        tint: root.tint;
+    Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.kind == 0 ? @image-url("icons/library.svg")
+            : root.kind == 1 ? @image-url("icons/music.svg")
+            : root.kind == 2 ? @image-url("icons/search.svg")
+            : root.kind == 3 ? @image-url("icons/download.svg")
+            : @image-url("icons/settings.svg");
+        colorize: root.tint;
+        accessible-role: none;
     }
     animate tint { duration: Theme.fast; }
 }

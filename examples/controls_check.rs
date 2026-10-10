@@ -1,4 +1,4 @@
-//! Renderer-level review of every glyph morph phase and status-dot alignment.
+//! Renderer-level review of stable icon geometry and status-dot alignment.
 use slint::ComponentHandle;
 slint::slint! {
     import { Theme } from "../ui/theme.slint";
@@ -7,7 +7,7 @@ slint::slint! {
     export component ControlsReview inherits Window {
         width: 560px; height: 630px;
         background: Theme.canvas;
-        Text { x: 20px; y: 16px; text: "Icon morph: rest / 25% / 50% / 75% / active"; color: Theme.foreground; font-size: 16px; }
+        Text { x: 20px; y: 16px; text: "Icon states: rest / 25% / 50% / 75% / active"; color: Theme.foreground; font-size: 16px; }
         for kind in 5: Rectangle {
             x: 20px; y: 55px + kind * 54px; width: 520px; height: 48px;
             background: Theme.surface;
@@ -47,6 +47,22 @@ fn capture(ui: &ControlsReview, output: &str) {
             rgba[0] as u16 > rgba[1] as u16 + 50,
             "search handle survives phase {phase}: {rgba:?}"
         );
+    }
+    // All hover phases retain the same vector silhouette, not disconnected
+    // notes/handles or a size/rotation wobble. Tint changes remain permitted.
+    for kind in 0_usize..5 {
+        for phase in 1..5 {
+            for y in 0..24 {
+                for x in 0..24 {
+                    let ink = |offset: usize| {
+                        let at = ((67 + kind * 54 + y) * 560 + 55 + offset * 100 + x) * 4;
+                        let p = &pixels.as_bytes()[at..at + 4];
+                        p[0] as u16 > p[1] as u16 + 50
+                    };
+                    assert_eq!(ink(0), ink(phase), "stable icon {kind} at {x},{y}");
+                }
+            }
+        }
     }
     // Fill begins at the left edge at every value, including 0% and 100%.
     let accent = |x: usize, y: usize| {

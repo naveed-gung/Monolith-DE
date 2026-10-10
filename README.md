@@ -38,6 +38,8 @@ live locally in SQLite. No account, cloud sync, or telemetry service.
 
 <img src="docs/img/player.png" width="1000" alt="Expanded player showing real local WebP fixture artwork and left-to-right playback progress">
 
+<img src="docs/img/guide.png" width="1000" alt="Section-aware guide beside Library, with the rest of the interface dimmed and blocked">
+
 </details>
 
 These are captures of the rendered Windows interface. Populated screenshots use
@@ -53,7 +55,8 @@ are not evidence of audio playback. Linux appearance has not been captured yet.
 | **Songs and search** | Sort by title, artist, album or added order. Local search responds after a short typing debounce. |
 | **Playback** | Click a song's artwork, title, details or row to play/pause. Favorites and playlist actions stay separate. Local covers, seek, volume, shuffle and repeat work in the compact bar and expanded player. |
 | **Downloads** | Explicit transfers through a user-selected yt-dlp executable. Real progress, cancellation and history; tools are not bundled. |
-| **Appearance** | Dark, light and system modes, animated icons, visible keyboard focus and adaptive navigation. Windows motion preference is respected. |
+| **Appearance** | Dark, light and system modes, consistent outline icons, quiet hover transitions, visible keyboard focus and adaptive navigation. Windows motion preference is respected. |
+| **Guided tour** | Help follows the section it explains. Next and Back change sections while the underlying interface stays dimmed and blocked; Close or Escape returns control to the app. |
 | **Windows integration** | Media controls, tray support that preserves your player and window size, optional acrylic, and a per-user installer. |
 
 ### Drop a file in. Keep listening.
@@ -72,6 +75,10 @@ New copies normally appear after 3–6 seconds, once copying settles. Files adde
 while Monolith was closed are found after opening it. An unchanged file you
 intentionally removed from the library stays removed across restarts; use manual
 import to bring it back. Other folders remain available through the import picker.
+
+If a saved song is unavailable, restore its file at the saved path or import its
+current folder. Library entries store file paths; they do not contain copies of
+the audio. A failed selection preserves the track already playing.
 
 ## Install
 
@@ -145,6 +152,7 @@ cargo test --release --locked --lib --bin monolith-desktop
 cargo run --release --locked --example workflow_check
 cargo run --release --locked --example transfer_check
 cargo run --release --locked --example visual_check -- shot.ppm 1280 820 0 check
+cargo run --release --locked --example guide_check -- shots/guide 420 380
 ```
 
 `workflow_check` needs a display and audio device. `transfer_check` runs a fake
@@ -175,6 +183,9 @@ transfer handling, live folder detection and pointer/keyboard checks. Renderer
 checks verify seek, volume and download fills from their left edge at multiple
 values. Row activation covers titles, details and spacing as well as artwork. Screenshots
 cover compact and wide layouts; glyph checks exercise software and GPU renderers.
+The modal guide passes Next/Back, Tab/Shift+Tab, Escape and background input checks
+at 1280×820, 760×600 and 420×380, including a collapsed rail and light mode. Its
+cards remain anchored to the highlighted navigation section.
 The October 10 Windows build passed nine native tray restore cycles across solid,
 translucent and maximized windows, with complete repaint and unchanged window size.
 Installation matched the verified player bytes and preserved the library database.

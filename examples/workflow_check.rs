@@ -63,6 +63,8 @@ fn main() -> Result<()> {
     let capture = std::env::args().nth(1);
     let second = dir.path().join("second.wav");
     std::fs::copy(&path, &second)?;
+    let first = path.clone();
+    let relocated = dir.path().join("relocated.wav");
     let selected = Rc::new(Cell::new(-1));
     let selected = selected.clone();
     let timer = slint::Timer::default();
@@ -142,6 +144,23 @@ fn main() -> Result<()> {
                     tick.set(8);
                 }
                 8 if ui.get_playing() && ui.get_current_id() == selected.get() => {
+                    // A disappeared next track must report how to recover it
+                    // without replacing the audio that is already playing.
+                    let missing = if selected.get() == 1 { &second } else { &first };
+                    std::fs::rename(missing, &relocated).unwrap();
+                    let id = if selected.get() == 1 { 2 } else { 1 };
+                    sender.send(Command::Play(id)).unwrap();
+                    tick.set(12);
+                }
+                12 if ui.get_status().contains("is unavailable") => {
+                    assert!(ui.get_status().contains("import its new folder"));
+                    assert!(
+                        ui.get_playing(),
+                        "missing next file preserves current audio"
+                    );
+                    assert_eq!(ui.get_current_id(), selected.get());
+                    let missing = if selected.get() == 1 { &second } else { &first };
+                    std::fs::rename(&relocated, missing).unwrap();
                     sender.send(Command::Next(1)).unwrap();
                     tick.set(9);
                 }
@@ -161,7 +180,7 @@ fn main() -> Result<()> {
                 }
                 11 if !ui.get_playing() => {
                     slint::quit_event_loop().unwrap();
-                    tick.set(12);
+                    tick.set(13);
                 }
                 _ => {}
             }
@@ -179,7 +198,7 @@ fn main() -> Result<()> {
     // All playback file handles must have been released at stop/shutdown.
     std::fs::rename(&path, dir.path().join("released.wav"))?;
     println!(
-        "PASS: row artwork from sidecar, duplicate import, metadata, play/pause/resume/seek/stop, volume, favorite, playlist, search, next/end/repeat, persistence, file release."
+        "PASS: row artwork, duplicate import, playback/seek, missing-file recovery message preserves current audio, volume, favorite, playlist, search, next/end/repeat, persistence, file release."
     );
     Ok(())
 }

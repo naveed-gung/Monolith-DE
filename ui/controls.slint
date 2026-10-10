@@ -55,6 +55,7 @@ export component Button inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> icon-only: false;
     callback clicked;
+    out property <bool> has-focus: focus.has-focus;
     private property <bool> focus-visible;
     private property <bool> down: touch.pressed && root.enabled;
     private property <bool> over: touch.has-hover && root.enabled;
@@ -136,8 +137,6 @@ export component IconButton inherits Rectangle {
     callback clicked;
     private property <bool> focus-visible;
     private property <bool> lit: root.enabled && (touch.has-hover || touch.pressed);
-    private property <float> pop: root.enabled && touch.has-hover && !touch.pressed ? 1 : 0;
-    animate pop { duration: Theme.fast; easing: ease-out; }
     width: root.size;
     height: root.size;
     horizontal-stretch: 0;
@@ -157,10 +156,9 @@ export component IconButton inherits Rectangle {
     FocusRing { shown: root.focus-visible; radius: root.size / 2; }
     Image {
         x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2 - 1px * root.pop;
-        width: root.icon-size * (1 + 0.14 * root.pop);
-        height: root.icon-size * (1 + 0.14 * root.pop);
-        transform-rotation: -5 * root.pop * 1deg;
+        y: (root.height - self.height) / 2;
+        width: root.icon-size;
+        height: root.icon-size;
         source: root.icon;
         colorize: root.enabled && root.active ? Theme.accent : root.enabled && touch.has-hover ? Theme.foreground : Theme.secondary;
         animate colorize { duration: Theme.fast; }

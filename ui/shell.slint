@@ -7,7 +7,9 @@ import { DownloadsPage } from "downloads.slint";
 import { SettingsPage } from "settings.slint";
 import { CoachMark, ThemeHint, GuideStep } from "guide.slint";
 
-export component AppShell inherits Rectangle {
+export component AppShell inherits FocusScope {
+    focus-on-click: false;
+    focus-on-tab-navigation: false;
     in property <length> viewport-width;
     in property <length> viewport-height;
     width: root.viewport-width;
@@ -121,8 +123,7 @@ export component AppShell inherits Rectangle {
     private property <int> page: min(max(root.selected-page, 0), 4);
     private property <bool> effective-light: root.theme-follow-system ? root.system-light : root.light;
     private property <[string]> titles: ["Library", "Songs", "Search", "Downloads", "Settings"];
-    // Indices into the shape-drawn glyphs, in the same order as `titles`. They
-    // are not images: a morph needs properties to animate, and an SVG has none.
+    // Indices into the shared outline family, in the same order as `titles`.
     private property <[int]> icons: [0, 1, 2, 3, 4];
     in-out property <bool> player-open: false;
     in-out property <int> guide-step: 0;
@@ -142,62 +143,38 @@ export component AppShell inherits Rectangle {
     private property <length> nav-top: root.tight-rail ? 60px : 94px;
     private property <length> guide-anchor: root.nav-top + root.guide-page * (root.nav-row + 4px) + root.nav-row / 2;
 
-    // One script per page, each declared with an explicit type. A single
-    // ternary chain of struct literals would infer an anonymous struct that
-    // Slint then refuses to convert. Downloads is the longest because that is
-    // where people expect Monolith to do something it deliberately does not do.
-    private property <[GuideStep]> guide-library: [
-        { title: "Point Monolith at your music", body: "Use Import music and pick a folder. Monolith reads the tags already inside your files, so nothing is copied, renamed or modified.", page: 0 },
-        { title: "Browse by what you have", body: "Use All music, Favorites or one of your playlists above the track list to filter your collection.", page: 0 },
-        { title: "Make a playlist", body: "New playlist creates an empty one. Add tracks with the plus button, or import an .m3u or .pls file you already use elsewhere.", page: 0 }
+    // Help and first-run onboarding share one section-aware tour.
+    // Keep this public property for the existing Rust API.
+    in-out property <bool> guide-touring: true;
+    private property <[GuideStep]> guide-steps: [
+        { title: "Library, your own collection", body: "Import a music folder, then browse All music, Favorites and playlists. Artwork comes from your files or images beside them. Your originals stay in place.", page: 0 },
+        { title: "Songs, the complete list", body: "Sort every imported track by title, artist, album or date added. Click a song row to play; the heart and playlist buttons keep their own actions.", page: 1 },
+        { title: "Search your music", body: "Find songs by title, artist or album. Search filters your local library; it never sends your query anywhere.", page: 2 },
+        { title: "Downloads, save a link", body: "Paste a YouTube or YouTube Music link and choose M4A or MP3. Download progress and errors appear here. MP3 conversion needs FFmpeg.", page: 3 },
+        { title: "Keep saved music together", body: "Completed audio joins your library automatically. Choose your save folder and yt-dlp executable in Settings. Existing files are never overwritten.", page: 3 },
+        { title: "Settings, make it yours", body: "Choose a theme, rendering mode and download folder. If a song has moved, restore its saved path or import its new folder. Your library stays on this PC.", page: 4 }
     ];
-    private property <[GuideStep]> guide-songs: [
-        { title: "Your whole library, sorted", body: "Every imported track, sorted by title, artist, album or when you added it.", page: 1 },
-        { title: "Keep your originals", body: "Removing a track from Monolith forgets its library entry. The original audio file stays on disk.", page: 1 }
-    ];
-    private property <[GuideStep]> guide-search: [
-        { title: "Search never leaves this PC", body: "Typing filters your library as you go. Nothing is sent anywhere.", page: 2 },
-        { title: "Narrow it down", body: "Search matches track titles, artists and albums in your imported music.", page: 2 }
-    ];
-    private property <[GuideStep]> guide-downloads: [
-        { title: "Monolith ships without a downloader", body: "Pulling audio out of YouTube needs yt-dlp on your PATH, and converting to MP3 also needs FFmpeg. Choose the yt-dlp executable and destination folder in Settings.", page: 3 },
-        { title: "Paste a link to save", body: "Paste a YouTube or YouTube Music URL. Choose M4A or MP3, then select Download to start. Progress and errors appear below the link.", page: 3 },
-        { title: "Pick the format deliberately", body: "M4A saves the original audio. MP3 converts it using FFmpeg.", page: 3 },
-        { title: "What happens to the file", body: "The track lands in your download folder and joins your library. Your files are never overwritten; if something with that name is already there you are told and nothing is replaced.", page: 3 }
-    ];
-    private property <[GuideStep]> guide-settings: [
-        { title: "Everything stays on this PC", body: "Your library is one SQLite file in your app data folder. There is no account and nothing is synced.", page: 4 },
-        { title: "Theme, rendering and power", body: "Dark is the default. Low-power rendering swaps the GPU renderer for the software one, which uses less memory and suits a laptop better.", page: 4 },
-        { title: "Tidy up after a reshuffle", body: "If you reorganise your music outside Monolith, run Scan for missing files to drop the rows whose files have gone.", page: 4 }
-    ];
-    // The first run walks the whole app, so the card travels with it instead of
-    // sitting on Downloads while it talks about Settings.
-    private property <[GuideStep]> guide-tour: [
-        { title: "Everything lives on this PC", body: "Monolith reads the tags inside your files and never copies, renames or modifies them. There is no account and nothing is synced.", page: 0 },
-        { title: "Your whole library, one flat list", body: "Songs is every track you have imported, sorted by title, artist, album or when you added it.", page: 1 },
-        { title: "Search that stays here", body: "Typing filters your library as you go. Nothing leaves your computer and nothing is sent anywhere.", page: 2 },
-        { title: "Monolith ships without a downloader", body: "Saving a link needs yt-dlp on your PATH, and converting to MP3 also needs FFmpeg. Choose the yt-dlp executable and destination folder in Settings.", page: 3 },
-        { title: "Paste a link to save", body: "Choose M4A or MP3, then select Download to start. Progress and errors appear below the link. Your files are never overwritten.", page: 3 },
-        { title: "One SQLite file, and that is all", body: "Everything is in your app data folder. Run Scan for missing files if you reorganise your music outside Monolith.", page: 4 }
-    ];
-    // Set by the first run, cleared whenever the help button is used instead.
-    in-out property <bool> guide-touring: false;
-    private property <[GuideStep]> guide-steps: root.guide-touring ? root.guide-tour
-        : root.page == 0 ? root.guide-library
-        : root.page == 1 ? root.guide-songs
-        : root.page == 2 ? root.guide-search
-        : root.page == 3 ? root.guide-downloads
-        : root.guide-settings;
+    changed guide-open => {
+        if root.guide-open {
+            root.player-open = false;
+            root.selected-page = root.guide-page;
+            coach.focus-primary();
+        } else { help.focus(); }
+    }
+    changed selected-page => {
+        if root.guide-open && root.selected-page != root.guide-page {
+            root.selected-page = root.guide-page;
+        }
+    }
+    capture-key-pressed(event) => {
+        if root.guide-open { return coach.handle-key(event); }
+        return reject;
+    }
     private property <bool> reveal: true;
     private property <bool> resetting: false;
     changed page => {
         root.resetting = true;
         root.reveal = false;
-        // Only the help button is per-page. A tour keeps its own position while
-        // it moves the app between sections.
-        if !root.guide-touring {
-            root.guide-step = 0;
-        }
     }
     init => {
         Palette.color-scheme = root.effective-light ? ColorScheme.light : ColorScheme.dark;
@@ -315,19 +292,17 @@ export component AppShell inherits Rectangle {
                 // use the brand slot for Help, leaving all five pages visible.
                 // Expansion is offered only where the expanded rail can fit.
                 // Shared rail-open geometry keeps the two slots apart mid-animation.
-                IconButton {
+                help := IconButton {
                     x: 16px;
                     y: root.tight-rail && root.viewport-width < 900px ? 8px
                         : parent.height - self.height - 12px - root.footer-lift;
                     size: 40px;
                     icon-size: 17px;
                     icon: @image-url("icons/help.svg");
-                    label: "How to use this page";
+                    label: "Show app guide";
                     clicked => {
-                        // The help button is always about the page you are on,
-                        // even if a first-run tour was interrupted.
-                        root.guide-touring = false;
-                        root.guide-step = 0;
+                        root.guide-touring = true;
+                        root.guide-step = root.page == 4 ? 5 : root.page;
                         root.guide-open = true;
                     }
                 }
@@ -507,13 +482,32 @@ export component AppShell inherits Rectangle {
         repeat-changed(value) => { root.repeat-mode = value; root.repeat-changed(value); }
         hide-to-tray => { root.hide-to-tray(); }
     }
-    CoachMark {
+    // Full-window, non-dismissable scrim blocks pointer, wheel and hover input.
+    // Keyboard capture above also prevents activation of previously focused UI.
+    if root.guide-open: Rectangle {
+        z: 20;
+        background: Theme.scrim;
+        TouchArea {
+            clicked => { coach.focus-primary(); }
+            scroll-event(event) => { return accept; }
+        }
+    }
+    if root.guide-open: Rectangle {
+        z: 21; x: 12px;
+        y: root.guide-anchor - root.nav-row / 2;
+        width: root.rail-width-now - 24px; height: root.nav-row;
+        border-radius: Theme.radius-control;
+        border-width: 1px; border-color: Theme.accent;
+        background: Theme.accent-soft;
+        accessible-role: none;
+    }
+    coach := CoachMark {
         shown: root.guide-open;
         steps: root.guide-steps;
         step <=> root.guide-step;
         // The card follows the app: every step names the page it is about.
         step-changed(value) => {
-            if root.guide-touring && value >= 0 && value < root.guide-steps.length {
+            if root.guide-open && value >= 0 && value < root.guide-steps.length {
                 root.selected-page = root.guide-steps[value].page;
             }
         }
@@ -521,11 +515,6 @@ export component AppShell inherits Rectangle {
         rail-width: root.rail-width-now;
         viewport-width: root.viewport-width;
         viewport-height: root.viewport-height;
-        // The card must clear the page header and the player bar, or it hides
-        // the very controls the guide is explaining.
-        header-height: 120px;
-        footer-inset: Theme.player-height;
-        compact: root.rail;
         closed => { root.guide-open = false; }
         finished => { root.guide-open = false; root.guide-done(); }
     }
