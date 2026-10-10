@@ -244,6 +244,115 @@ impl Library {
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
+    /// Reimported, moved songs keep their original identity. Only one missing
+    /// and one available entry with the same filename and tags can be joined.
+    /// Ambiguous matches and different recordings remain separate.
+    pub fn reconnect_imports(&self) -> Result<Vec<(i64, i64)>> {
+        let mut groups = std::collections::HashMap::new();
+        for track in self.tracks(0)? {
+            let name = Path::new(&track.path)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let name = if cfg!(windows) {
+                name.to_lowercase()
+            } else {
+                name
+            };
+            groups
+                .entry((
+                    name,
+                    track.title.clone(),
+                    track.artist.clone(),
+                    track.album.clone(),
+                ))
+                .or_insert_with(Vec::new)
+                .push(track);
+        }
+        let mut matches = Vec::new();
+        for group in groups.values() {
+            if group.len() != 2 {
+                continue;
+            }
+            let present: Vec<_> = group
+                .iter()
+                .filter(|t| Path::new(&t.path).is_file())
+                .collect();
+            if present.len() != 1 {
+                continue;
+            }
+            let restored = present[0];
+            let missing = group.iter().find(|t| t.id != restored.id).unwrap();
+            let valid = lofty::probe::Probe::open(&restored.path).and_then(|p| {
+                p.options(lofty::config::ParseOptions::new().read_cover_art(false))
+                    .read()
+            });
+            if (missing.seconds - restored.seconds).abs() <= 0.5
+                && valid.is_ok_and(|file| {
+                    (file.properties().duration().as_secs_f64() - restored.seconds).abs() <= 0.5
+                })
+            {
+                matches.push((missing.clone(), restored.clone()));
+            }
+        }
+        if matches.is_empty() {
+            return Ok(Vec::new());
+        }
+        // SQLite creates a consistent snapshot before the metadata-only repair.
+        if let Some(path) = self.0.path().filter(|p| !p.is_empty() && *p != ":memory:") {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos();
+            let backup =
+                Path::new(path).with_file_name(format!("library-before-reconnect-{stamp}.sqlite3"));
+            self.0.execute(
+                "VACUUM INTO ?1",
+                [backup.to_str().ok_or("Invalid backup path")?],
+            )?;
+        }
+        let tx = self.0.unchecked_transaction()?;
+        let mut aliases = Vec::new();
+        for (kept, restored) in matches {
+            tx.execute("INSERT OR IGNORE INTO playlist_tracks SELECT playlist_id,?1 FROM playlist_tracks WHERE track_id=?2", params![kept.id, restored.id])?;
+            tx.execute("DELETE FROM tracks WHERE id=?1", [restored.id])?;
+            tx.execute(
+                "UPDATE tracks SET path=?1,seconds=?2,favorite=?3 WHERE id=?4",
+                params![
+                    restored.path,
+                    restored.seconds,
+                    kept.favorite || restored.favorite,
+                    kept.id
+                ],
+            )?;
+            aliases.push((restored.id, kept.id));
+        }
+        for key in ["current", "queue"] {
+            let saved = self.setting(key, "");
+            let mut seen = std::collections::HashSet::new();
+            let value = saved
+                .split(',')
+                .filter_map(|s| s.parse::<i64>().ok())
+                .map(|id| {
+                    aliases
+                        .iter()
+                        .find(|(from, _)| *from == id)
+                        .map_or(id, |(_, to)| *to)
+                })
+                .filter(|id| seen.insert(*id))
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            if !saved.is_empty() {
+                tx.execute(
+                    "UPDATE settings SET value=?1 WHERE key=?2",
+                    params![value, key],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(aliases)
+    }
     pub fn playlists(&self) -> Result<Vec<(i64, String)>> {
         Ok(self
             .0
@@ -505,6 +614,80 @@ pub fn clock(seconds: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn restored_song(dir: &Path, db: &Library) -> Result<PathBuf> {
+        let path = dir.join("song.wav");
+        let mut wav = b"RIFF".to_vec();
+        wav.extend(32036u32.to_le_bytes());
+        wav.extend(b"WAVEfmt ");
+        wav.extend(16u32.to_le_bytes());
+        wav.extend(1u16.to_le_bytes());
+        wav.extend(1u16.to_le_bytes());
+        wav.extend(8000u32.to_le_bytes());
+        wav.extend(16000u32.to_le_bytes());
+        wav.extend(2u16.to_le_bytes());
+        wav.extend(16u16.to_le_bytes());
+        wav.extend(b"data");
+        wav.extend(32000u32.to_le_bytes());
+        wav.resize(32044, 0);
+        std::fs::write(&path, wav)?;
+        db.0.execute("INSERT INTO tracks(path,title,artist,album,seconds,favorite) VALUES(?1,'song','Unknown artist','Singles',2,1)", [dir.join("old/song.wav").to_str().unwrap()])?;
+        db.import(&path)?;
+        Ok(path.canonicalize()?)
+    }
+    #[test]
+    fn reimported_song_keeps_identity_collections_and_has_a_recoverable_backup() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db = Library::open(&dir.path().join("library.sqlite3"))?;
+        let audio = restored_song(dir.path(), &db)?;
+        let bytes = std::fs::read(&audio)?;
+        db.create_playlist("Original collection")?;
+        db.create_playlist("New collection")?;
+        let lists = db.playlists()?;
+        db.add_to_playlist(lists[0].0, 1)?;
+        db.add_to_playlist(lists[1].0, 2)?;
+        db.save("current", "2")?;
+        db.save("queue", "1,2")?;
+        assert_eq!(db.reconnect_imports()?, vec![(2, 1)]);
+        let tracks = db.tracks(0)?;
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].id, 1);
+        assert!(tracks[0].favorite);
+        assert_eq!(Path::new(&tracks[0].path), audio);
+        for (id, _) in lists {
+            assert_eq!(db.playlist_track_ids(id)?, vec![1]);
+        }
+        assert_eq!(db.setting("current", ""), "1");
+        assert_eq!(db.setting("queue", ""), "1");
+        assert_eq!(std::fs::read(audio)?, bytes);
+        let backup = std::fs::read_dir(dir.path())?
+            .filter_map(|e| e.ok())
+            .find(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("library-before-reconnect-")
+            })
+            .unwrap();
+        let snapshot = Connection::open(backup.path())?;
+        assert_eq!(
+            snapshot.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get::<_, i32>(0))?,
+            2
+        );
+        assert!(db.reconnect_imports()?.is_empty());
+        Ok(())
+    }
+    #[test]
+    fn ambiguous_or_different_recordings_are_not_reconnected() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db = Library::open(&dir.path().join("library.sqlite3"))?;
+        restored_song(dir.path(), &db)?;
+        db.0.execute("UPDATE tracks SET seconds=9 WHERE id=1", [])?;
+        assert!(db.reconnect_imports()?.is_empty());
+        db.0.execute("UPDATE tracks SET seconds=2 WHERE id=1", [])?;
+        db.0.execute("INSERT INTO tracks(path,title,artist,album,seconds) VALUES(?1,'song','Unknown artist','Singles',2)", [dir.path().join("another/song.wav").to_str().unwrap()])?;
+        assert!(db.reconnect_imports()?.is_empty());
+        assert_eq!(db.tracks(0)?.len(), 3);
+        Ok(())
+    }
     #[test]
     fn parses_m3u_and_pls_playlist_text() {
         let (name, entries) = parse_playlist(

@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if mode == Some("guide") {
         // Opens the coaching overlay over the page it describes, so the copy
         // can be reviewed against the controls it points at.
-        ui.set_guide_step([0, 7, 8, 9, 10][page as usize]);
+        ui.set_guide_step([0, 3, 6, 9, 12][page as usize]);
         ui.set_guide_open(true);
     }
     // Synthetic rows for the review modes, so a snapshot has something to draw

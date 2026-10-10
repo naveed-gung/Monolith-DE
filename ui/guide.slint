@@ -4,6 +4,32 @@ import { Button, ButtonKind } from "controls.slint";
 export struct TourTarget { x: length, y: length, width: length, height: length }
 export struct GuideStep { title: string, body: string, page: int, target: int }
 
+// Measure a zero-offset child: Slint 1.17 can count an opacity-wrapped
+// component root's offset twice when absolute-position is read at its use site.
+export component TourAnchor inherits FocusScope {
+    x: 0px; y: 0px; width: 0px; height: 0px; accessible-role: none;
+    focus-on-click: false; focus-on-tab-navigation: false;
+    in property <length> target-width;
+    in property <length> target-height;
+    in property <int> step: -1;
+    in property <length> viewport-width;
+    in property <length> viewport-height;
+    in property <length> offset;
+    private property <bool> pending: true;
+    private property <TourTarget> area: { x: self.absolute-position.x,
+        y: self.absolute-position.y, width: root.target-width, height: root.target-height };
+    callback measure(TourTarget);
+    changed area => { root.measure(root.area); }
+    changed step => { root.pending = true; }
+    changed viewport-width => { root.pending = true; }
+    changed viewport-height => { root.pending = true; }
+    changed offset => { root.pending = true; }
+    Timer {
+        interval: 1ms; running: root.pending;
+        triggered => { root.pending = false; root.measure(root.area); }
+    }
+}
+
 // The shell owns input isolation; each card follows its real layout target.
 export component CoachMark inherits Rectangle {
     in property <bool> shown: false;
@@ -18,6 +44,8 @@ export component CoachMark inherits Rectangle {
     callback closed;
     callback finished;
     private property <int> current: clamp(root.step, 0, max(root.steps.length - 1, 0));
+    private property <int> section-step: mod(root.current, 3);
+    private property <[string]> sections: ["LIBRARY", "SONGS", "SEARCH", "DOWNLOADS", "SETTINGS"];
     private property <bool> last: root.current >= root.steps.length - 1;
     visible: root.shown;
     z: 30;
@@ -94,12 +122,12 @@ export component CoachMark inherits Rectangle {
             HorizontalLayout {
                 spacing: 12px; vertical-stretch: 0;
                 Text {
-                    text: "QUICK TOUR"; color: Theme.accent;
+                    text: root.steps.length == 0 ? "QUICK TOUR" : root.sections[root.steps[root.current].page] + " · QUICK TOUR"; color: Theme.accent;
                     font-size: Theme.type-caption; font-weight: 600;
                     horizontal-stretch: 1;
                 }
                 Text {
-                    text: (root.current + 1) + " / " + root.steps.length;
+                    text: (root.section-step + 1) + " / 3";
                     color: Theme.muted; font-size: Theme.type-caption;
                 }
             }
@@ -115,9 +143,9 @@ export component CoachMark inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: 4px; vertical-stretch: 0;
-                for index in root.steps.length: Rectangle {
+                for index in 3: Rectangle {
                     height: 3px; border-radius: 1.5px;
-                    background: index <= root.current ? Theme.accent : Theme.border;
+                    background: index <= root.section-step ? Theme.accent : Theme.border;
                     animate background { duration: Theme.fast; }
                 }
             }

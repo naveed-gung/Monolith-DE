@@ -145,3 +145,10 @@ sh packaging/linux/check-install.sh
 
 This checks both source and bundle installs, icon lookup, quoted executable paths,
 uninstall cleanup and preservation of the library directory.
+
+The shared October 10 update adds three-step tours for each tab, full-brightness
+spotlights, scroll-to-target positioning, and clearly labelled empty-library
+examples. Player titles open the expanded player. Reimported moved songs can
+reconnect to a unique old entry with a database backup and preserved collections.
+These changes have Windows verification only; a native Linux build and `.deb`
+remain deferred under the 100 MB download cap.

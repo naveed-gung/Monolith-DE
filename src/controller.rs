@@ -144,7 +144,26 @@ impl Worker {
     /// Reloads library rows and playlist metadata from disk. Everything else
     /// filters from the in-memory copy.
     fn reload(&mut self) -> Result<()> {
+        let repairs = self.db.reconnect_imports()?;
+        let repaired = !repairs.is_empty();
+        for (from, to) in repairs {
+            if self.current == Some(from) {
+                self.current = Some(to);
+            }
+            for id in &mut self.queue {
+                if *id == from {
+                    *id = to;
+                }
+            }
+            self.art.remove(&to);
+            self.art_order.retain(|id| *id != to);
+        }
         self.all = self.db.tracks(0)?;
+        if repaired {
+            let mut seen = std::collections::HashSet::new();
+            self.queue.retain(|id| seen.insert(*id));
+            self.show_player();
+        }
         self.thumbnails.clear();
         self.playlists = self.db.playlists()?;
         self.members.clear();

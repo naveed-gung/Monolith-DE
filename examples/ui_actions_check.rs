@@ -166,6 +166,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         click(&ui, 46., 776.);
         assert!(ui.get_player_open(), "artwork opens the expanded player");
         ui.set_player_open(false);
+        for y in [764., 784.] {
+            click(&ui, 115., y);
+            assert!(
+                ui.get_player_open(),
+                "player title and artist open expanded player"
+            );
+            ui.set_player_open(false);
+        }
+        key(&ui, "\n".into());
+        assert!(
+            ui.get_player_open(),
+            "player title supports keyboard activation"
+        );
+        ui.set_player_open(false);
         ui.set_selected_page(3);
         let ui = ui.clone_strong();
         slint::Timer::single_shot(Duration::from_millis(100), move || {

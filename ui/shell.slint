@@ -171,26 +171,34 @@ export component AppShell inherits FocusScope {
     // Keep this public property for the existing Rust API.
     in-out property <bool> guide-touring: true;
     private property <[GuideStep]> guide-steps: [
-        { title: "Library, your own collection", body: "This is your music's home. Next will show you the controls inside Library, one at a time.", page: 0, target: 0 },
-        { title: "Bring your music in", body: "Import audio files or choose a music folder. Monolith links to your originals; it does not copy or download them.", page: 0, target: 1 },
-        { title: "Find a song quickly", body: "Type a title, artist or album to filter this collection. The search field appears once you import music.", page: 0, target: 2 },
-        { title: "All music, Favorites, playlists", body: "Use these collections to narrow the list. A song's heart adds it to Favorites without moving its file.", page: 0, target: 3 },
-        { title: "Make a playlist", body: "Choose New playlist, enter a name, then Create. You can also import an M3U or PLS playlist of local songs.", page: 0, target: 4 },
-        { title: "Each song has its own actions", body: "Click a song to play or pause. Heart saves a favorite; the list button manages playlists. Remove asks first.", page: 0, target: 5 },
-        { title: "Your player stays with you", body: "Play, pause and seek here while browsing. Click the artwork to expand the player. A missing file offers Locate file to reconnect it.", page: 0, target: 6 },
-        { title: "Songs, the complete list", body: "Sort every imported track by title, artist, album or date added. Songs shows the entire library, regardless of your Library collection.", page: 1, target: 0 },
-        { title: "Search your music", body: "Find songs across your local library. Your search stays on this device.", page: 2, target: 0 },
-        { title: "Downloads, save a link", body: "Choose M4A or MP3, then follow real progress here. MP3 needs FFmpeg. Saved audio joins Library automatically; choose its folder in Settings.", page: 3, target: 0 },
-        { title: "Settings, make it yours", body: "Choose a theme, rendering mode and music folder. Your library stays on this PC. Reopen Help anytime to start this tour again.", page: 4, target: 0 }
+        { title: "Library, your own collection", body: "Keep your local music in collections and playlists. Next takes you inside this tab.", page: 0, target: 0 },
+        { title: "Bring your music in", body: "Choose files or a folder. Music/Monolith is watched automatically; your originals stay in place.", page: 0, target: 1 },
+        { title: "Your songs, up close", body: root.tracks.length == 0 ? "This is an example, without audio. Import your music to play; favorites and playlist actions live here." : "Click a song to play. Heart favorites it; the list adds it to playlists. Remove always asks first.", page: 0, target: 5 },
+        { title: "Songs, the complete list", body: "Every imported song appears here, regardless of the collection selected in Library.", page: 1, target: 0 },
+        { title: "Make the list your own", body: "Sort by title, artist, album or newest first. Sorting changes the view, never your files.", page: 1, target: 7 },
+        { title: "The player stays with you", body: "Seek from left to right. Click the song name or artwork to open the full player.", page: 1, target: 6 },
+        { title: "Search, find your next listen", body: "Look through the music on this device. Your searches stay private and local.", page: 2, target: 0 },
+        { title: "Find a song quickly", body: "Type a title, artist or album here. Matching songs appear below as you type.", page: 2, target: 2 },
+        { title: "Same songs, same actions", body: "Click a result to play. Heart saves a favorite. With no music yet, this row is a labelled example.", page: 2, target: 5 },
+        { title: "Downloads, save for later", body: "Save a supported music link, then find the audio in your library after it finishes.", page: 3, target: 0 },
+        { title: "Start with a link", body: "Paste a YouTube or YouTube Music link. Choose M4A, or MP3 if FFmpeg is installed.", page: 3, target: 1 },
+        { title: "Follow real progress", body: "Download starts here. Progress and errors appear below; completed files join Library automatically.", page: 3, target: 2 },
+        { title: "Settings, make it yours", body: "Choose how Monolith looks and where it saves music. Help always starts this tour again.", page: 4, target: 0 },
+        { title: "An appearance that suits you", body: "Choose Light, Dark or System here. Acrylic and low-power rendering are just below.", page: 4, target: 1 },
+        { title: "Choose where music is saved", body: "Set your download folder here. Monolith watches this folder and Music/Monolith for new audio.", page: 4, target: 2 }
     ];
     private property <int> guide-kind: root.guide-step >= 0 && root.guide-step < root.guide-steps.length
         ? root.guide-steps[root.guide-step].target : 0;
     private property <TourTarget> library-target;
-    private property <TourTarget> guide-target: root.guide-kind == 0
+    private property <TourTarget> downloads-target;
+    private property <TourTarget> settings-target;
+    out property <TourTarget> guide-card-area: { x: coach.x, y: coach.y, width: coach.width, height: coach.height };
+    out property <TourTarget> guide-target: root.guide-kind == 0
         ? { x: 12px, y: root.guide-anchor - root.nav-row / 2, width: root.rail-width-now - 24px, height: root.nav-row }
         : root.guide-kind == 6
         ? { x: player.absolute-position.x + 16px, y: player.absolute-position.y + 4px, width: player.width - 32px, height: player.height - 8px }
-        : root.library-target;
+        : root.guide-page == 3 ? root.downloads-target
+        : root.guide-page == 4 ? root.settings-target : root.library-target;
     changed guide-open => {
         if root.guide-open {
             root.player-open = false;
@@ -323,7 +331,7 @@ export component AppShell inherits FocusScope {
                         padding: 14px;
                         spacing: 4px;
                         Text { text: "Local by design"; color: Theme.foreground; font-size: Theme.type-body; font-weight: 600; }
-                        Text { text: "\{root.total-tracks} tracks on this PC"; color: Theme.muted; font-size: Theme.type-label; }
+                        Text { text: root.total-tracks == 1 ? "1 track on this PC" : "\{root.total-tracks} tracks on this PC"; color: Theme.muted; font-size: Theme.type-label; }
                     }
                 }
                 // Utilities occupy separate 40 px slots. Short narrow windows
@@ -388,7 +396,8 @@ export component AppShell inherits FocusScope {
                             animate y, opacity { duration: root.resetting ? 0ms : Theme.slow; }
                             if root.page < 3: LibraryPage {
                                 page: root.page;
-                                tour-kind: root.guide-kind;
+                                tour-kind: root.guide-open ? root.guide-kind : -1;
+                                tour-open: root.guide-open;
                                 tour-area-changed(area) => { root.library-target = area; }
                                 total-tracks: root.total-tracks;
                                 album-count: root.album-count;
@@ -418,6 +427,8 @@ export component AppShell inherits FocusScope {
                                 remove-from-playlist(id, title) => { root.request-removal(id, title, true); }
                             }
                             if root.page == 3: DownloadsPage {
+                                tour-kind: root.guide-open ? root.guide-kind : -1;
+                                tour-area-changed(area) => { root.downloads-target = area; }
                                 compact: root.rail;
                                 download-folder: root.download-folder;
                                 download-status: root.download-status;
@@ -430,6 +441,8 @@ export component AppShell inherits FocusScope {
                                 cancel-download => { root.cancel-download(); }
                             }
                             if root.page == 4: SettingsPage {
+                                tour-kind: root.guide-open ? root.guide-kind : -1;
+                                tour-area-changed(area) => { root.settings-target = area; }
                                 compact: root.rail;
                                 light <=> root.light;
                                 theme-follow-system <=> root.theme-follow-system;
@@ -522,23 +535,33 @@ export component AppShell inherits FocusScope {
         repeat-changed(value) => { root.repeat-mode = value; root.repeat-changed(value); }
         hide-to-tray => { root.hide-to-tray(); }
     }
-    // Full-window, non-dismissable scrim blocks pointer, wheel and hover input.
-    // Keyboard capture above also prevents activation of previously focused UI.
+    // Reverse inner winding cuts a real hole through a viewport-sized mask.
+    // A separate transparent shield blocks input inside the bright region too.
+    private property <length> spot-x: clamp(root.guide-target.x, 0px, root.width);
+    private property <length> spot-y: clamp(root.guide-target.y, 0px, root.height);
+    private property <length> spot-w: clamp(root.guide-target.width, 0px, root.width - root.spot-x);
+    private property <length> spot-h: clamp(root.guide-target.height, 0px, root.height - root.spot-y);
+    out property <TourTarget> guide-spotlight-area: { x: root.spot-x, y: root.spot-y, width: root.spot-w, height: root.spot-h };
+    if root.guide-open && !root.dialog-open: Rectangle {
+        z: 20; width: root.width; height: root.height; accessible-role: none;
+        Path {
+            width: root.width; height: root.height;
+            viewbox-width: root.width / 1px; viewbox-height: root.height / 1px;
+            fill: Theme.scrim;
+            commands: "M0 0 H\{root.width / 1px} V\{root.height / 1px} H0 Z M\{root.spot-x / 1px} \{root.spot-y / 1px} V\{(root.spot-y + root.spot-h) / 1px} H\{(root.spot-x + root.spot-w) / 1px} V\{root.spot-y / 1px} Z";
+        }
+        Rectangle {
+            x: root.spot-x; y: root.spot-y; width: root.spot-w; height: root.spot-h;
+            border-radius: Theme.radius-control; border-width: 1px; border-color: Theme.accent;
+        }
+    }
     if root.guide-open || root.dialog-open: Rectangle {
-        z: 20;
-        background: Theme.scrim;
+        z: 21; width: root.width; height: root.height;
+        background: root.dialog-open ? Theme.scrim : transparent;
         TouchArea {
             clicked => { if root.dialog-open { warning.focus-safe(); } else { coach.focus-primary(); } }
             scroll-event(event) => { return accept; }
         }
-    }
-    if root.guide-open: Rectangle {
-        z: 21; x: root.guide-target.x; y: root.guide-target.y;
-        width: root.guide-target.width; height: root.guide-target.height;
-        border-radius: Theme.radius-control;
-        border-width: 1px; border-color: Theme.accent;
-        background: Theme.accent-soft;
-        accessible-role: none;
     }
     coach := CoachMark {
         shown: root.guide-open && !root.dialog-open;

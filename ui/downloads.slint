@@ -1,9 +1,25 @@
+import { TourTarget, TourAnchor } from "guide.slint";
 import { Theme } from "theme.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Button, ButtonKind, TextField, Chip, ProgressBar, Card, Caption, SectionLabel } from "controls.slint";
 
 export component DownloadsPage inherits Rectangle {
     in property <bool> compact;
+    in property <int> tour-kind: -1;
+    callback tour-area-changed(TourTarget);
+    private property <TourTarget> link-area;
+    private property <TourTarget> save-area;
+    private property <TourTarget> area: root.tour-kind == 1 ? root.link-area : root.save-area;
+    changed area => { root.tour-area-changed(self.area); }
+    private property <bool> reposition;
+    changed tour-kind => { if root.tour-kind > 0 { root.reposition = true; } }
+    Timer {
+        interval: 50ms; running: root.reposition;
+        triggered => {
+            root.reposition = false;
+            scroll.viewport-y = min(0px, scroll.viewport-y + scroll.absolute-position.y + 8px - root.area.y);
+        }
+    }
     in property <string> download-folder;
     in property <string> download-status;
     in property <string> download-history;
@@ -23,7 +39,7 @@ export component DownloadsPage inherits Rectangle {
             Text { text: "Downloads"; color: Theme.foreground; font-size: Theme.type-display; font-weight: 700; overflow: elide; }
             Text { text: "Your music, ready for offline listening."; color: Theme.secondary; font-size: Theme.type-body; overflow: elide; }
         }
-        ScrollView {
+        scroll := ScrollView {
             vertical-stretch: 1;
             vertical-scrollbar-policy: ScrollBarPolicy.always-off;
             horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
@@ -54,6 +70,11 @@ export component DownloadsPage inherits Rectangle {
                             }
                         }
                         TextField {
+                            TourAnchor {
+                                step: root.tour-kind; viewport-width: root.width; viewport-height: root.height; offset: scroll.viewport-y;
+                                target-width: parent.width; target-height: parent.height;
+                                measure(area) => { root.link-area = area; }
+                            }
                             icon: @image-url("icons/music.svg");
                             placeholder: "Paste your music link";
                             label: "YouTube or YouTube Music download link";
@@ -88,6 +109,11 @@ export component DownloadsPage inherits Rectangle {
                             }
                             if root.downloading: Text { text: "\{round(root.download-progress)}%"; color: Theme.accent; font-size: Theme.type-body; font-family: "Consolas"; }
                             Button {
+                                TourAnchor {
+                                    step: root.tour-kind; viewport-width: root.width; viewport-height: root.height; offset: scroll.viewport-y;
+                                    target-width: parent.width; target-height: parent.height;
+                                    measure(area) => { root.save-area = area; }
+                                }
                                 kind: root.downloading ? ButtonKind.danger : ButtonKind.primary;
                                 text: root.downloading ? "Cancel" : "Download";
                                 enabled: root.downloading || root.url != "";

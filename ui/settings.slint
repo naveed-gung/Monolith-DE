@@ -1,3 +1,4 @@
+import { TourTarget, TourAnchor } from "guide.slint";
 import { Theme } from "theme.slint";
 import { Version } from "version.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -28,6 +29,21 @@ component SettingRow inherits Rectangle {
 
 export component SettingsPage inherits Rectangle {
     in property <bool> compact;
+    in property <int> tour-kind: -1;
+    callback tour-area-changed(TourTarget);
+    private property <TourTarget> appearance-area;
+    private property <TourTarget> folder-area;
+    private property <TourTarget> area: root.tour-kind == 1 ? root.appearance-area : root.folder-area;
+    changed area => { root.tour-area-changed(self.area); }
+    private property <bool> reposition;
+    changed tour-kind => { if root.tour-kind > 0 { root.reposition = true; } }
+    Timer {
+        interval: 50ms; running: root.reposition;
+        triggered => {
+            root.reposition = false;
+            scroll.viewport-y = min(0px, scroll.viewport-y + scroll.absolute-position.y + 8px - root.area.y);
+        }
+    }
     in-out property <bool> light;
     in-out property <bool> theme-follow-system;
     in property <bool> system-light;
@@ -74,7 +90,7 @@ export component SettingsPage inherits Rectangle {
                 Text { text: "Keep Monolith quiet, local, and light on your system."; color: Theme.secondary; font-size: Theme.type-body; overflow: elide; }
             }
         }
-        ScrollView {
+        scroll := ScrollView {
             vertical-stretch: 1;
             vertical-scrollbar-policy: ScrollBarPolicy.always-off;
             horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
@@ -99,6 +115,11 @@ export component SettingsPage inherits Rectangle {
                         HorizontalLayout {
                             vertical-stretch: 0;
                             spacing: 7px;
+                            TourAnchor {
+                                step: root.tour-kind; viewport-width: root.width; viewport-height: root.height; offset: scroll.viewport-y;
+                                target-width: parent.width; target-height: parent.height;
+                                measure(area) => { root.appearance-area = area; }
+                            }
                             Chip {
                                 text: "System";
                                 selected: root.theme-follow-system;
@@ -185,6 +206,11 @@ export component SettingsPage inherits Rectangle {
                         Rectangle { height: 1px; background: Theme.border; }
                         SettingRow {
                             label: "Download folder";
+                            TourAnchor {
+                                step: root.tour-kind; viewport-width: root.width; viewport-height: root.height; offset: scroll.viewport-y;
+                                target-width: parent.width; target-height: parent.height;
+                                measure(area) => { root.folder-area = area; }
+                            }
                             value: root.download-folder;
                             action: "Choose";
                             action-label: "Choose download folder";

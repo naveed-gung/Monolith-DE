@@ -2,12 +2,16 @@ import { Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Version } from "version.slint";
 import { AppShell } from "shell.slint";
+import { TourTarget } from "guide.slint";
 import { TrackRow } from "library.slint";
 import { Button, ButtonKind } from "controls.slint";
 
 // The root component is intentionally thin. It preserves the stable public API
 // consumed by Rust while the redesigned desktop surfaces live in focused files.
 export component AppWindow inherits Window {
+    out property <TourTarget> guide-target: shell.guide-target;
+    out property <TourTarget> guide-card-area: shell.guide-card-area;
+    out property <TourTarget> guide-spotlight-area: shell.guide-spotlight-area;
     title: "Monolith";
     // Rounded variant: a square icon reads as an unfinished asset in the
     // Windows title bar and taskbar.

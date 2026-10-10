@@ -40,7 +40,9 @@ live locally in SQLite. No account, cloud sync, or telemetry service.
 
 | Learn the controls in place | Remove with confidence |
 | --- | --- |
-| ![Contextual Library guide with dimmed and blocked background](docs/img/guide.png) | ![Library removal warning with Cancel as the safe default](docs/img/remove-warning.png) |
+| ![Library tour with a bright, disabled example song in an empty library](docs/img/guide.png) | ![Library removal warning with Cancel as the safe default](docs/img/remove-warning.png) |
+
+<img src="docs/img/downloads-guide.png" width="1000" alt="Downloads tour highlighting the link field at normal brightness while background input stays blocked">
 
 </details>
 
@@ -55,10 +57,10 @@ are not evidence of audio playback. Linux appearance has not been captured yet.
 | **Automatic imports** | New audio in Music/Monolith and your selected save folder appears while the app is open. Nested folders work too. |
 | **Library and playlists** | Favorites, custom playlists, and M3U/PLS imports. Song removal asks for confirmation, defaults to Cancel, and leaves the original audio file alone. Removing from a playlist keeps the song in Library. |
 | **Songs and search** | Sort by title, artist, album or added order. Local search responds after a short typing debounce. |
-| **Playback** | Click a song's artwork, title, details or row to play/pause. Favorites and playlist actions stay separate. Local covers, seek, volume, shuffle and repeat work in the compact bar and expanded player. |
+| **Playback** | Click a song's artwork, title, details or row to play/pause. Favorites and playlist actions stay separate. Click the player’s song name or artwork to expand it. Local covers, seek, volume, shuffle and repeat work in the compact bar and expanded player. |
 | **Downloads** | Explicit transfers through a user-selected yt-dlp executable. Real progress, cancellation and history; tools are not bundled. |
 | **Appearance** | Dark, light and system modes, consistent outline icons, quiet hover transitions, visible keyboard focus and adaptive navigation. Windows motion preference is respected. |
-| **Guided tour** | Help always starts at Library. Next walks through import, filtering, collections, playlists, song actions and the player, then the remaining sections. Bubbles follow the control being explained; the background stays dimmed and blocked. Close or Escape ends the tour. |
+| **Guided tour** | Help always starts at Library. Every tab has three steps with its own 1/3–3/3 counter. Bubbles follow controls scrolled into view; the highlighted control stays bright, while all page input stays blocked. Empty music tabs show a labelled, disabled example song during the tour only. Close or Escape ends the tour. |
 | **Windows integration** | Media controls, tray support that preserves your player and window size, optional acrylic, and a per-user installer. |
 
 ### Drop a file in. Keep listening.
@@ -85,14 +87,24 @@ files and files already assigned to another song are rejected before the saved
 path changes. Cancelling keeps everything as it was. If the original audio was
 deleted, restore it first; the library database does not contain a copy of it.
 
+Reimporting a moved song also reconnects a unique matching entry automatically.
+Filename, tags and duration must match; ambiguous recordings remain separate.
+A database backup comes first, then favorites and playlist memberships are kept
+on the original entry. Your audio files are never deleted or modified.
+
 ```mermaid
 flowchart LR
     Missing["Audio moved or missing"] --> Locate["Locate file"]
     Locate --> Check{"Valid audio and unused path?"}
     Check -- Yes --> Reconnect["Reconnect the same library entry"]
-    Reconnect --> Play["Resume playback"]
+    Reconnect --> Play["Song available to play"]
     Check -- No --> Keep["Keep the existing entry"]
     Locate -- Cancel --> Keep
+    Missing --> Import["Reimport the relocated song"]
+    Import --> Match{"Unique matching filename, tags and duration?"}
+    Match -- Yes --> Backup["Back up the library database"]
+    Backup --> Reconnect
+    Match -- No --> Separate["Keep entries separate"]
 ```
 
 ## Install
@@ -192,7 +204,11 @@ Rust build caches are much larger than the shipped application. `target/` and
 release packages before cleaning caches; dependency sources remain in Cargo's
 separate cache.
 
-Windows verification includes 24 library tests and 4 artwork tests (including
+A debug-cache cleanup reclaimed 5.15 GiB on the verification machine. Debug and
+release artifacts stay outside Git; an IDE may regenerate debug artifacts when
+it checks the project again.
+
+Windows verification includes 26 core tests and 4 artwork tests (including
 bounded WebP and corrupt embedded pictures), playback/persistence workflows,
 transfer handling, live folder detection and pointer/keyboard checks. Renderer
 checks verify seek, volume and download fills from their left edge at multiple
@@ -200,15 +216,21 @@ values. Row activation covers titles, details and spacing as well as artwork. Sc
 cover compact and wide layouts; glyph checks exercise software and GPU renderers.
 The modal guide passes Next/Back, Tab/Shift+Tab, Escape and background input checks
 at 1280×820, 760×600 and 420×380, including a collapsed rail and light mode. Its
-cards follow the highlighted Library control or navigation section. Help also restarts correctly after completing or closing the tour. Warning checks cover Cancel/Remove, playlist identity and background isolation; moved-file recovery also passes through the real Windows file picker.
+cards follow real controls across all five tabs. Guide scenarios include empty
+libraries, scrolled songs and both renderers. Pixel checks verify full target
+brightness and no bubble overlap. Help restarts after completing or closing the
+tour. Warning checks cover Cancel/Remove, playlist identity and background
+isolation; moved-file recovery passes through the real Windows file picker.
 An earlier October 10 Windows build passed nine native tray restore cycles across
 solid, translucent and maximized windows. The latest update repeats three solid
-tray restores, with complete repaint and unchanged window size.
+and three acrylic tray restores, with complete repaint and unchanged window size.
 Installation matched the verified player bytes and preserved the library database.
-Default software rendering during one generated WAV/WebP playback fixture measured
-43.8 MB working set, 12.9 MB private memory and no child processes in the latest ten-second sample. This short sample
-is not a large-library or playback-peak guarantee; the target remains ≤130 MB including
-child processes. Linux builds remain deferred under the 100 MB download cap.
+The subsequent backed-up repair also preserved song identity, favorites, playlists
+and the audio files. Default software rendering during playback with a 157-song
+library copy measured 44.9 MB working set, 13.2 MB private memory and no child
+processes in a short ten-second sample. This is not a large-library or playback-peak
+guarantee; the target remains ≤130 MB including child processes. Linux builds
+remain deferred under the 100 MB download cap.
 
 Physical DPI transitions, screen-reader announcements, large-library performance,
 real download peaks and Linux runtime still need verification. See the examples
