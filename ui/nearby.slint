@@ -1,0 +1,163 @@
+import { ListView, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Button, ButtonKind, Card, Caption, SectionLabel, ProgressBar } from "controls.slint";
+
+component Choice inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    in property <bool> enabled: true;
+    callback clicked;
+    height: 44px;
+    background: root.selected ? Theme.accent-soft : touch.has-hover && root.enabled ? Theme.hover : transparent;
+    border-radius: Theme.radius-control;
+    border-width: focus.has-focus ? 1px : 0px;
+    border-color: Theme.accent;
+    animate background { duration: Theme.fast; }
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    forward-focus: focus;
+    Text { x: 12px; width: parent.width - 24px; text: root.text; color: root.selected ? Theme.accent : Theme.foreground; overflow: elide; vertical-alignment: center; }
+    touch := TouchArea { enabled: root.enabled; clicked => { focus.focus(); root.clicked(); } }
+    focus := FocusScope {
+        width: 0px; enabled: root.enabled;
+        key-pressed(event) => { if event.text == " " || event.text == "\n" { root.clicked(); return accept; } return reject; }
+    }
+}
+
+export component NearbyWindow inherits Window {
+    title: "Share music · Monolith";
+    icon: @image-url("../assets/monolith-mark.png");
+    preferred-width: 620px; preferred-height: 720px;
+    min-width: 420px; min-height: 380px;
+    background: Theme.surface-strong;
+    default-font-family: "Segoe UI Variable";
+    in property <bool> light;
+    in property <bool> reduce-motion;
+    changed light => { Theme.light = root.light; }
+    changed reduce-motion => { Theme.reduce-motion = root.reduce-motion; }
+    in property <[string]> songs;
+    in property <[string]> devices;
+    in property <[string]> device-ids;
+    in-out property <int> song-index: -1;
+    in-out property <int> device-index: -1;
+    in property <bool> available;
+    in-out property <int> method: 0;
+    in property <bool> batch;
+    in property <string> receiving-name;
+    callback choose-method(int);
+    in property <bool> busy;
+    in property <bool> listening;
+    in property <bool> incoming;
+    in property <string> incoming-title;
+    in property <string> incoming-detail;
+    in property <string> status: "Refresh paired devices to begin.";
+    in property <float> progress;
+    in property <string> destination;
+    callback refresh;
+    callback send-song(int, int);
+    callback receive-song;
+    callback cancel;
+    callback decide(bool);
+    VerticalLayout {
+        padding: 20px; spacing: 14px;
+        HorizontalLayout {
+            vertical-stretch: 0;
+            cross-axis-alignment: center; spacing: 12px;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                Text { text: "Share music"; color: Theme.foreground; font-size: 26px; font-weight: 700; }
+                Caption { text: root.method == 0 ? "Choose how to share" : root.method == 1 ? "Monolith app · same Wi-Fi" : "Nearby · Bluetooth"; }
+            }
+            if root.method > 0: Button { text: "Back"; label: "Change sharing method"; enabled: !root.busy && !root.listening; clicked => { root.choose-method(0); } }
+            if root.method > 0: Button { text: "Refresh"; label: "Refresh nearby devices and songs"; enabled: !root.busy && !root.listening; clicked => { root.refresh(); } }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                alignment: start; padding: 4px; spacing: 14px;
+                if root.method == 0: Card {
+                    VerticalLayout {
+                        padding: 18px; spacing: 14px; alignment: start;
+                        Text { text: "Send music nearby"; color: Theme.foreground; font-size: Theme.type-heading; font-weight: 600; }
+                        Caption { text: "Choose a connection. The recipient approves each song before it enters their library."; }
+                        Button { text: "Monolith app · Wi-Fi"; label: "Share via Monolith app"; icon: @image-url("icons/wifi.svg"); kind: ButtonKind.primary; enabled: !root.busy; clicked => { root.choose-method(1); } }
+                        Caption { text: "Devices on the same local network. Encrypted transfer; no account or cloud storage."; }
+                        Button { text: "Bluetooth"; label: "Share via Bluetooth"; icon: @image-url("icons/bluetooth.svg"); enabled: !root.busy; clicked => { root.choose-method(2); } }
+                        Caption { text: "Paired devices with compatible Monolith sharing support."; }
+                    }
+                }
+                if root.method > 0 && !root.listening && !root.incoming: Caption { text: root.method == 1 ? "Choose Receive on the other Monolith device. Nearby Monolith devices appear here; choose one and send. The recipient approves each song." : "Pair devices in system Bluetooth settings first. Open Share music on both devices, then choose Receive on the recipient."; }
+                if root.method > 0 && !root.incoming && !root.listening: VerticalLayout {
+                    spacing: 8px;
+                    SectionLabel { text: root.batch ? "1 · SELECTED SONGS" : "1 · CHOOSE A SONG"; }
+                    if root.batch: Caption { text: "\{root.songs.length} selected songs. Change this selection in Library or Songs."; }
+                    Card {
+                        height: root.songs.length > 0 ? 142px : 64px;
+                        ListView {
+                            x: 6px; y: 6px; width: parent.width - 12px; height: parent.height - 12px;
+                            for song[index] in root.songs: Choice {
+                                text: song; selected: root.batch || root.song-index == index; enabled: !root.batch && !root.busy && !root.listening;
+                                clicked => { root.song-index = index; }
+                            }
+                        }
+                        if root.songs.length == 0: Text { x: 12px; width: parent.width - 24px; text: "Import music into your library first."; color: Theme.muted; vertical-alignment: center; }
+                    }
+                    SectionLabel { text: root.method == 1 ? "2 · NEARBY MONOLITH APPS" : "2 · CHOOSE A PAIRED DEVICE"; }
+                    Card {
+                        height: root.devices.length > 0 ? 100px : 64px;
+                        ListView {
+                            x: 6px; y: 6px; width: parent.width - 12px; height: parent.height - 12px;
+                            for device[index] in root.devices: Choice {
+                                text: device; selected: root.device-index == index; enabled: !root.busy && !root.listening;
+                                clicked => { root.device-index = index; }
+                            }
+                        }
+                        if root.devices.length == 0: Text { x: 12px; width: parent.width - 24px; text: root.method == 1 ? "No receiving Monolith apps found." : "No paired devices available."; color: Theme.muted; vertical-alignment: center; }
+                    }
+                    Caption { text: "Mobile devices need the matching Monolith sharing update. Bluetooth on iPhone and Linux is pending."; }
+                }
+                if root.method == 1 && root.listening: Card {
+                    VerticalLayout {
+                        padding: 14px; spacing: 8px;
+                        SectionLabel { text: "READY TO RECEIVE"; }
+                        Text { text: root.receiving-name; color: Theme.foreground; font-size: Theme.type-heading; font-weight: 600; wrap: word-wrap; }
+                        Caption { text: "Choose this device on the sender. You’ll be asked before each song is saved."; }
+                    }
+                }
+                if root.incoming: Card {
+                    VerticalLayout {
+                        padding: 16px; spacing: 12px;
+                        SectionLabel { text: "INCOMING SONG"; color: Theme.accent; }
+                        Text { text: root.incoming-title; color: Theme.foreground; font-size: Theme.type-heading; font-weight: 600; wrap: word-wrap; }
+                        Caption { text: root.incoming-detail; }
+                        Caption { text: "Accept saves this song and adds it to your library. Existing files stay intact."; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { text: "Decline"; clicked => { root.decide(false); } }
+                            Button { text: "Accept song"; kind: ButtonKind.primary; clicked => { root.decide(true); } }
+                        }
+                    }
+                }
+                Caption { text: "Received songs: " + root.destination; }
+            }
+        }
+        ProgressBar { progress: root.progress; }
+        Caption { text: root.status; accessible-live-region: polite; }
+        HorizontalLayout {
+            height: root.method > 0 ? 40px : 0px;
+            vertical-stretch: 0;
+            spacing: 8px;
+            if root.method > 0 && !root.busy && !root.listening: Button {
+                text: root.batch ? "Send selected songs" : "Send song"; kind: ButtonKind.primary;
+                enabled: root.available && root.song-index >= 0 && root.device-index >= 0;
+                clicked => { root.send-song(root.song-index, root.device-index); }
+            }
+            if root.method > 0 && !root.busy && !root.listening: Button { text: "Receive"; enabled: root.available; clicked => { root.receive-song(); } }
+            if root.busy || root.listening: Button { text: "Cancel"; clicked => { root.cancel(); } }
+        }
+    }
+}

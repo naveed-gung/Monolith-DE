@@ -63,6 +63,10 @@ export component AppShell inherits FocusScope {
     in property <string> download-history;
     in property <float> download-progress: 0;
     in property <bool> downloading: false;
+    in property <string> update-status: "Check GitHub for a newer desktop version.";
+    in property <bool> update-busy;
+    in property <bool> update-available;
+    in property <bool> update-ready;
     // Decoded in Rust at startup so the developer card carries no plain text.
     in property <string> dev-name;
     in property <string> dev-role;
@@ -104,6 +108,21 @@ export component AppShell inherits FocusScope {
     callback cancel-download;
     callback open-link(string);
     callback open-settings;
+    in-out property <bool> selecting;
+    in property <[int]> selected-ids;
+    in property <bool> all-visible-selected;
+    callback toggle-selection(int);
+    callback select-visible(bool);
+    callback clear-selection;
+    callback batch-remove([int]);
+    callback batch-remove-playlist([int], int);
+    callback batch-add([int], int);
+    callback batch-create([int], string);
+    callback open-sharing;
+    callback check-update;
+    callback download-update;
+    callback install-update;
+    callback cancel-update;
     callback theme-hint-dismissed;
     callback guide-done;
     in-out property <int> unavailable-track-id: -1;
@@ -115,7 +134,8 @@ export component AppShell inherits FocusScope {
     private property <string> removal-title;
     private property <string> removal-collection;
     private property <int> removal-list-id;
-    private property <bool> dialog-open: root.removal-id >= 0 || root.unavailable-track-id >= 0;
+    private property <[int]> removal-ids;
+    private property <bool> dialog-open: root.removal-id >= 0 || root.removal-ids.length > 0 || root.unavailable-track-id >= 0;
     function request-removal(id: int, title: string, playlist: bool) {
         root.removal-title = title;
         root.removal-playlist = playlist;
@@ -124,7 +144,16 @@ export component AppShell inherits FocusScope {
         root.removal-id = id;
         warning.focus-safe();
     }
+    function request-batch-removal(playlist: bool) {
+        root.removal-ids = root.selected-ids;
+        root.removal-title = "\{root.removal-ids.length} selected songs";
+        root.removal-playlist = playlist;
+        root.removal-collection = root.playlists[root.playlist-index];
+        root.removal-list-id = root.playlist-ids[root.playlist-index];
+        warning.focus-safe();
+    }
     function dismiss-dialog() {
+        root.removal-ids = [];
         root.removal-id = -1;
         root.unavailable-track-id = -1;
         root.focus();
@@ -174,9 +203,9 @@ export component AppShell inherits FocusScope {
         { title: "Library, your own collection", body: "Keep your local music in collections and playlists. Next takes you inside this tab.", page: 0, target: 0 },
         { title: "Bring your music in", body: "Choose files or a folder. Music/Monolith is watched automatically; your originals stay in place.", page: 0, target: 1 },
         { title: "Your songs, up close", body: root.tracks.length == 0 ? "This is an example, without audio. Import your music to play; favorites and playlist actions live here." : "Click a song to play. Heart favorites it; the list adds it to playlists. Remove always asks first.", page: 0, target: 5 },
-        { title: "Songs, the complete list", body: "Every imported song appears here, regardless of the collection selected in Library.", page: 1, target: 0 },
+        { title: "Songs, the complete list", body: "Every imported song appears here. Click a song to play; its name or artwork in the player opens the full view.", page: 1, target: 0 },
         { title: "Make the list your own", body: "Sort by title, artist, album or newest first. Sorting changes the view, never your files.", page: 1, target: 7 },
-        { title: "The player stays with you", body: "Seek from left to right. Click the song name or artwork to open the full player.", page: 1, target: 6 },
+        { title: "Share your music", body: "Share offers Monolith app on the same network or paired Bluetooth. Use Select for several songs; each recipient approves before saving. Mobile needs the matching update.", page: 1, target: 8 },
         { title: "Search, find your next listen", body: "Look through the music on this device. Your searches stay private and local.", page: 2, target: 0 },
         { title: "Find a song quickly", body: "Type a title, artist or album here. Matching songs appear below as you type.", page: 2, target: 2 },
         { title: "Same songs, same actions", body: "Click a result to play. Heart saves a favorite. With no music yet, this row is a labelled example.", page: 2, target: 5 },
@@ -195,12 +224,12 @@ export component AppShell inherits FocusScope {
     out property <TourTarget> guide-card-area: { x: coach.x, y: coach.y, width: coach.width, height: coach.height };
     out property <TourTarget> guide-target: root.guide-kind == 0
         ? { x: 12px, y: root.guide-anchor - root.nav-row / 2, width: root.rail-width-now - 24px, height: root.nav-row }
-        : root.guide-kind == 6
-        ? { x: player.absolute-position.x + 16px, y: player.absolute-position.y + 4px, width: player.width - 32px, height: player.height - 8px }
         : root.guide-page == 3 ? root.downloads-target
         : root.guide-page == 4 ? root.settings-target : root.library-target;
     changed guide-open => {
         if root.guide-open {
+            root.selecting = false;
+            root.clear-selection();
             root.player-open = false;
             root.selected-page = root.guide-page;
             coach.focus-primary();
@@ -214,11 +243,14 @@ export component AppShell inherits FocusScope {
     capture-key-pressed(event) => {
         if root.dialog-open { return warning.handle-key(event); }
         if root.guide-open { return coach.handle-key(event); }
+        if root.selecting && event.text == Key.Escape { root.selecting = false; root.clear-selection(); return accept; }
+        if root.selecting && event.modifiers.control && event.text == "a" { root.select-visible(true); return accept; }
         return reject;
     }
     private property <bool> reveal: true;
     private property <bool> resetting: false;
     changed page => {
+        root.selecting = false; root.clear-selection();
         root.resetting = true;
         root.reveal = false;
     }
@@ -347,6 +379,11 @@ export component AppShell inherits FocusScope {
                     icon: @image-url("icons/help.svg");
                     label: "Show app guide";
                     clicked => {
+                        // Reset immediately: changed handlers on forwarded properties
+                        // are not guaranteed to run for writes from this component.
+                        root.selecting = false;
+                        root.clear-selection();
+                        root.player-open = false;
                         root.guide-touring = true;
                         root.guide-step = 0;
                         root.guide-open = true;
@@ -395,6 +432,18 @@ export component AppShell inherits FocusScope {
                             opacity: root.reveal ? 1 : 0;
                             animate y, opacity { duration: root.resetting ? 0ms : Theme.slow; }
                             if root.page < 3: LibraryPage {
+                                open-sharing => { root.open-sharing(); }
+                                selecting <=> root.selecting;
+                                selected-ids: root.selected-ids;
+                                all-visible-selected: root.all-visible-selected;
+                                playlist-ids: root.playlist-ids;
+                                toggle-selection(id) => { root.toggle-selection(id); }
+                                select-visible(yes) => { root.select-visible(yes); }
+                                clear-selection => { root.clear-selection(); }
+                                batch-add(playlist) => { root.batch-add(root.selected-ids, playlist); }
+                                batch-create(name) => { root.batch-create(root.selected-ids, name); }
+                                batch-remove => { root.request-batch-removal(false); }
+                                batch-remove-playlist => { root.request-batch-removal(true); }
                                 page: root.page;
                                 tour-kind: root.guide-open ? root.guide-kind : -1;
                                 tour-open: root.guide-open;
@@ -419,7 +468,7 @@ export component AppShell inherits FocusScope {
                                 create-playlist(name) => { root.create-playlist(name); }
                                 delete-playlist => { root.delete-playlist(); }
                                 request-thumbnail(id) => { root.request-thumbnail(id); }
-        play-track(id) => { root.play-track(id); }
+                                play-track(id) => { root.play-track(id); }
                                 toggle-play => { root.toggle-play(); }
                                 favorite-track(id) => { root.favorite-track(id); }
                                 remove-track(id, title) => { root.request-removal(id, title, false); }
@@ -441,6 +490,14 @@ export component AppShell inherits FocusScope {
                                 cancel-download => { root.cancel-download(); }
                             }
                             if root.page == 4: SettingsPage {
+                                update-status: root.update-status;
+                                update-busy: root.update-busy;
+                                update-available: root.update-available;
+                                update-ready: root.update-ready;
+                                check-update => { root.check-update(); }
+                                download-update => { root.download-update(); }
+                                install-update => { root.install-update(); }
+                                cancel-update => { root.cancel-update(); }
                                 tour-kind: root.guide-open ? root.guide-kind : -1;
                                 tour-area-changed(area) => { root.settings-target = area; }
                                 compact: root.rail;
@@ -591,21 +648,24 @@ export component AppShell inherits FocusScope {
     }
     warning := ActionDialog {
         shown: root.dialog-open;
-        destructive: root.removal-id >= 0;
-        heading: root.removal-id >= 0
+        destructive: root.removal-id >= 0 || root.removal-ids.length > 0;
+        heading: (root.removal-id >= 0 || root.removal-ids.length > 0)
             ? root.removal-playlist ? "Remove from playlist?" : "Remove from library?"
             : "This song's file is missing";
-        subject: root.removal-id >= 0 ? root.removal-title : root.unavailable-title;
-        description: root.removal-id >= 0
-            ? root.removal-playlist ? "Remove from \"" + root.removal-collection + "\"? The song stays in your library. Its audio file is kept."
-                : "This removes the song from your library and its playlists. The original audio file is kept."
+        subject: (root.removal-id >= 0 || root.removal-ids.length > 0) ? root.removal-title : root.unavailable-title;
+        description: (root.removal-id >= 0 || root.removal-ids.length > 0)
+            ? root.removal-playlist ? "Remove from \"" + root.removal-collection + "\"? Songs stay in your library. Original audio files are kept."
+                : root.removal-ids.length > 0 ? "Remove these songs from your library and playlists? Original audio files are kept." : "This removes the song from your library and its playlists. The original audio file is kept."
             : "Choose this song's audio file at its new location. Favorites and playlists are kept. If the file was deleted, restore it first.";
-        detail: root.removal-id >= 0 ? "" : root.unavailable-path;
-        action: root.removal-id >= 0 ? "Remove" : "Locate file";
+        detail: (root.removal-id >= 0 || root.removal-ids.length > 0) ? "" : root.unavailable-path;
+        action: (root.removal-id >= 0 || root.removal-ids.length > 0) ? "Remove" : "Locate file";
         viewport-width: root.viewport-width; viewport-height: root.viewport-height;
         cancelled => { root.dismiss-dialog(); }
         confirmed => {
-            if root.removal-id >= 0 {
+            if root.removal-ids.length > 0 {
+                if root.removal-playlist { root.batch-remove-playlist(root.removal-ids, root.removal-list-id); }
+                else { root.batch-remove(root.removal-ids); }
+            } else if root.removal-id >= 0 {
                 if root.removal-playlist { root.remove-from-playlist(root.removal-id, root.removal-list-id); }
                 else { root.remove-track(root.removal-id); }
             } else { root.locate-track(root.unavailable-track-id); }

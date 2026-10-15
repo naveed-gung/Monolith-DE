@@ -1,0 +1,128 @@
+name: Desktop packages
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    # Private/larger runners are deliberately forbidden by this workflow.
+    if: github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Prepare draft for release tags
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/package-metadata.py --check-version
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo 'Build/check only. No packages are retained and nothing is published.'
+            exit 0
+          fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo 'Existing release found. Refusing to overwrite its packages.' >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" --verify-tag --draft \
+            --title "Monolith Desktop $GITHUB_REF_NAME" \
+            --notes 'Windows and Linux packages are being built. Publish this draft only after both jobs succeed and packages have been reviewed.'
+          echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+
+  package:
+    needs: release
+    if: github.event.repository.private == false
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            platform: windows-x86_64
+          - os: ubuntu-24.04
+            platform: linux-amd64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    env:
+      CARGO_BUILD_JOBS: '1'
+      CARGO_TERM_COLOR: always
+      RUSTUP_TOOLCHAIN: '1.98.1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt
+
+      - name: Install Linux build libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential pkg-config dpkg-dev \
+            libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libgl1-mesa-dev libfontconfig1-dev
+
+      - name: Check release version
+        shell: bash
+        run: python tools/package-metadata.py --check-version
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Test player
+        run: cargo test --release --locked --lib --bin monolith-desktop
+
+      - name: Build player
+        run: cargo build --release --locked --bin monolith-desktop
+
+      - name: Build Windows setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:MONOLITH_PLAYER_EXE = (Resolve-Path target/release/monolith-desktop.exe).Path
+          cargo build --manifest-path installer/Cargo.toml --release --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item -LiteralPath installer/target/release/monolith-setup.exe -Destination dist/monolith-setup.exe
+
+      - name: Package Linux Debian archive
+        if: runner.os == 'Linux'
+        run: sh packaging/linux/build-deb.sh
+
+      - name: Generate package checksums
+        shell: bash
+        run: python tools/package-metadata.py --platform '${{ matrix.platform }}' --directory dist
+
+      # Release assets do not use billable Actions artifact/cache storage. Build
+      # directories disappear with the free standard public runner. Main/PR runs
+      # retain logs only; a version tag stores just the final native packages.
+      - name: Attach final packages to draft release
+        if: needs.release.outputs.tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY"
+        # The token is provided only to the release upload; checkout does not persist it.
+    permissions:
+      contents: write

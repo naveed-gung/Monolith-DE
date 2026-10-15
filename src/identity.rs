@@ -1,10 +1,10 @@
 use crate::identity_data as data;
 use crate::library::Result;
-use crate::seal::{Keystream, decode};
-use std::process::Command;
+use crate::seal::decode;
+use std::{io::Read, path::Path, process::Command};
 
-/// Portrait, sealed. The PNG is unreadable without the keystream.
-const PORTRAIT: &[u8] = include_bytes!("../assets/profile-card.enc");
+// Only a public product mark is embedded. Personal portraits stay on disk.
+const AVATAR: &[u8] = include_bytes!("../assets/monolith-mark-72.png");
 
 /// Decoded developer identity, resolved once at startup.
 pub struct Identity {
@@ -12,10 +12,8 @@ pub struct Identity {
     pub role: String,
     pub github: String,
     pub portfolio: String,
-    pub instagram: String,
     pub github_url: String,
     pub portfolio_url: String,
-    pub instagram_url: String,
     /// Where the crash reporter sends a report. Sealed like the rest, because it
     /// carries the same handle: a literal here puts it back in the binary.
     pub issue_repo: String,
@@ -28,26 +26,44 @@ impl Default for Identity {
             role: decode(&data::ROLE, 1),
             github: decode(&data::GITHUB, 2),
             portfolio: decode(&data::PORTFOLIO, 3),
-            instagram: decode(&data::INSTAGRAM, 4),
             github_url: decode(&data::URL_GITHUB, 5),
             portfolio_url: decode(&data::URL_PORTFOLIO, 6),
-            instagram_url: decode(&data::URL_INSTAGRAM, 7),
             issue_repo: decode(&data::ISSUE_REPO, 8),
         }
     }
 }
 
-/// Unseals the portrait into an RGBA image for Slint.
-///
-/// Returns `None` rather than a broken image if the PNG header does not come
-/// back, which is the cheapest proof the keystream still lines up.
-pub fn portrait() -> Option<slint::Image> {
-    let mut key = Keystream::new(data::PROFILE_FIELD);
-    let png: Vec<u8> = PORTRAIT.iter().map(|byte| byte ^ key.next()).collect();
-    if !png.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return None;
-    }
-    let decoded = image::load_from_memory_with_format(&png, image::ImageFormat::Png).ok()?;
+/// Public product avatar, with no personal portrait in the source or package.
+pub fn avatar() -> Option<slint::Image> {
+    decode_avatar(AVATAR)
+}
+
+/// Optional local portrait; never required by builds or embedded in packages.
+/// Read before constructing the UI. Missing/invalid files keep the product mark.
+pub fn avatar_from(data: &Path) -> Option<slint::Image> {
+    let local = (|| {
+        let mut bytes = Vec::new();
+        std::fs::File::open(data.join("developer-photo.png"))
+            .ok()?
+            .take(256 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        (bytes.len() <= 256 * 1024)
+            .then(|| decode_avatar(&bytes))
+            .flatten()
+    })();
+    local.or_else(avatar)
+}
+
+fn decode_avatar(bytes: &[u8]) -> Option<slint::Image> {
+    let mut reader =
+        image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(512);
+    limits.max_image_height = Some(512);
+    limits.max_alloc = Some(4 * 1024 * 1024);
+    reader.limits(limits);
+    let decoded = reader.decode().ok()?;
     let rgba = decoded.to_rgba8();
     let (width, height) = rgba.dimensions();
     Some(slint::Image::from_rgba8(
@@ -97,15 +113,13 @@ mod tests {
     /// decoded value must reproduce the stored bytes exactly.
     #[test]
     fn every_field_round_trips_through_the_keystream() {
-        let stored: [(&[u8], u8); 9] = [
+        let stored: [(&[u8], u8); 7] = [
             (&data::NAME, 0),
             (&data::ROLE, 1),
             (&data::GITHUB, 2),
             (&data::PORTFOLIO, 3),
-            (&data::INSTAGRAM, 4),
             (&data::URL_GITHUB, 5),
             (&data::URL_PORTFOLIO, 6),
-            (&data::URL_INSTAGRAM, 7),
             (&data::ISSUE_REPO, 8),
         ];
         for (bytes, field) in stored {
@@ -123,10 +137,8 @@ mod tests {
             &identity.role,
             &identity.github,
             &identity.portfolio,
-            &identity.instagram,
             &identity.github_url,
             &identity.portfolio_url,
-            &identity.instagram_url,
         ] {
             assert!(!value.is_empty());
             assert!(value.chars().all(|c| !c.is_control()));
@@ -137,21 +149,34 @@ mod tests {
     #[test]
     fn links_are_web_urls() {
         let identity = Identity::default();
-        for url in [
-            &identity.github_url,
-            &identity.portfolio_url,
-            &identity.instagram_url,
-        ] {
+        for url in [&identity.github_url, &identity.portfolio_url] {
             assert!(url.starts_with("https://"), "{url} is not https");
             assert!(url.len() > "https://".len() + 4, "{url} has no host");
         }
     }
 
     #[test]
-    fn the_sealed_portrait_is_not_a_png_until_unsealed() {
-        assert!(!PORTRAIT.starts_with(b"\x89PNG"));
-        let image = portrait().expect("the portrait must unseal");
+    fn public_product_avatar_decodes() {
+        let image = avatar().expect("the product mark must decode");
         assert!(image.size().width > 0 && image.size().height > 0);
+    }
+
+    #[test]
+    fn local_avatar_is_optional_and_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("developer-photo.png");
+        let fallback = avatar().unwrap().size();
+        assert_eq!(avatar_from(directory.path()).unwrap().size(), fallback);
+        // Use a generic fixture, never a personal portrait in tests/source.
+        let image = image::RgbaImage::from_pixel(96, 96, image::Rgba([80, 80, 80, 255]));
+        image.save(&path).unwrap();
+        assert_eq!(avatar_from(directory.path()).unwrap().size().width, 96);
+        for invalid in [b"invalid png".as_slice(), &vec![0; 256 * 1024 + 1]] {
+            std::fs::write(&path, invalid).unwrap();
+            assert_eq!(avatar_from(directory.path()).unwrap().size(), fallback);
+        }
+        image::RgbaImage::new(513, 1).save(&path).unwrap();
+        assert_eq!(avatar_from(directory.path()).unwrap().size(), fallback);
     }
 
     #[test]

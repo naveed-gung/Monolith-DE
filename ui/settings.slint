@@ -87,6 +87,14 @@ export component SettingsPage inherits Rectangle {
     in property <string> dev-portfolio-url;
     in property <image> dev-photo;
     callback open-link(string);
+    in property <string> update-status;
+    in property <bool> update-busy;
+    in property <bool> update-available;
+    in property <bool> update-ready;
+    callback check-update;
+    callback download-update;
+    callback install-update;
+    callback cancel-update;
 
     VerticalLayout {
         spacing: 18px;
@@ -234,6 +242,30 @@ export component SettingsPage inherits Rectangle {
                         Caption { text: "YouTube extraction needs yt-dlp. MP3 conversion also needs FFmpeg on PATH."; }
                     }
                 }
+                Card {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        padding: root.compact ? 12px : 20px;
+                        spacing: 12px;
+                        SectionLabel { text: "APP UPDATES"; }
+                        Text { text: "Monolith " + Version.value; color: Theme.foreground; font-size: Theme.type-heading; font-weight: 600; }
+                        Caption { text: root.update-status; accessible-live-region: polite; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { text: "Check for updates"; enabled: !root.update-busy; clicked => { root.check-update(); } }
+                            if root.update-busy: Button { text: "Cancel"; clicked => { root.cancel-update(); } }
+                            if root.update-available && !root.update-ready && !root.update-busy: Button {
+                                text: "Download"; kind: ButtonKind.primary; enabled: !root.update-busy;
+                                clicked => { root.download-update(); }
+                            }
+                            if root.update-ready && !root.update-busy: Button {
+                                text: "Open installer"; kind: ButtonKind.primary; enabled: !root.update-busy;
+                                clicked => { root.install-update(); }
+                            }
+                        }
+                        Caption { text: "Updates use GitHub over HTTPS. Downloads require your click and stay under 100 MB. Your library stays intact."; }
+                    }
+                }
                 SectionLabel { text: "DEVELOPER"; }
                 Card {
                     horizontal-stretch: 1;
@@ -243,10 +275,7 @@ export component SettingsPage inherits Rectangle {
                         HorizontalLayout {
                             vertical-stretch: 0;
                             spacing: 16px;
-                            // Square, rounded, and clipped so the portrait fills the
-                            // frame exactly instead of stretching. The pixels are
-                            // unsealed in Rust and arrive as an image, so the asset
-                            // on disk is unreadable.
+                            // Local portrait when available; public mark otherwise. Neither needs a private embedded payload.
                             SquareImage {
                                 height: 60px;
                                 radius: Theme.radius-panel;

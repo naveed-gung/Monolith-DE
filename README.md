@@ -2,9 +2,15 @@
   <img src="assets/monolith-mark.png" width="80" alt="Monolith logo">
 </p>
 <h1 align="center">Monolith Desktop</h1>
+
+> [!NOTE]
+> **Development on hold**
+>
+> Monolith Desktop is currently on hold. New features and improvements are planned for a future update.
+
 <p align="center"><strong>Your music. A place of its own.</strong><br>Native local playback, a personal library, and a quiet coral interface.</p>
 <p align="center">
-  <img alt="Version 0.3.0" src="https://img.shields.io/badge/version-0.3.0-E95668?style=flat-square">
+  <img alt="Version 0.6.0" src="https://img.shields.io/badge/version-0.6.0-E95668?style=flat-square">
   <img alt="Rust and Slint" src="https://img.shields.io/badge/built_with-Rust_%2B_Slint-29292F?style=flat-square">
   <img alt="Windows verified" src="https://img.shields.io/badge/Windows-verified-167A4B?style=flat-square">
   <img alt="Linux build pending" src="https://img.shields.io/badge/Linux-build_pending-966000?style=flat-square">
@@ -26,6 +32,10 @@ live locally in SQLite. No account, cloud sync, or telemetry service.
 | Downloads | Windows setup |
 | --- | --- |
 | ![Downloads with aligned status and audio format controls](docs/img/downloads.png) | ![Monolith Windows setup wizard](docs/img/installer.png) |
+
+| Select several songs | Sharing explained in place |
+| --- | --- |
+| ![Compact checkbox selection with bulk song actions](docs/img/selection.png) | ![Songs guide highlighting Share and Select at normal brightness](docs/img/sharing-guide.png) |
 
 <details>
 <summary><strong>Search, compact windows and light appearance</strong></summary>
@@ -59,11 +69,13 @@ are not evidence of audio playback. Linux appearance has not been captured yet.
 | **Automatic imports** | New audio in Music/Monolith and your selected save folder appears while the app is open. Nested folders work too. |
 | **Library and playlists** | Favorites, custom playlists, and M3U/PLS imports. Song removal asks for confirmation, defaults to Cancel, and leaves the original audio file alone. Removing from a playlist keeps the song in Library. |
 | **Songs and search** | Sort by title, artist, album or added order. Local search responds after a short typing debounce. |
+| **Selection and sharing** | Select songs with checkboxes, then share a batch, add to a playlist, create a populated playlist or remove entries after confirmation. Library and Songs offer a Share icon with Monolith app and Bluetooth options. |
 | **Playback** | Click a song's artwork, title, details or row to play/pause. Favorites and playlist actions stay separate. Click the player’s song name or artwork to expand it. Local covers, seek, volume, shuffle and repeat work in the compact bar and expanded player. |
 | **Downloads** | Explicit transfers through a user-selected yt-dlp executable. Real progress, cancellation and history; tools are not bundled. |
 | **Appearance** | Dark, light and system modes, consistent outline icons, quiet hover transitions, visible keyboard focus and adaptive navigation. Windows motion preference is respected. |
 | **Guided tour** | Help always starts at Library. Every tab has three steps with its own 1/3–3/3 counter. Bubbles follow controls scrolled into view; the highlighted control stays bright, while all page input stays blocked. Empty music tabs show a labelled, disabled example song during the tour only. Close or Escape ends the tour. |
 | **Windows integration** | Media controls, tray support that preserves your player and window size, optional acrylic, and a per-user installer. |
+| **Updates** | Explicit GitHub release checks; verified native packages under 100 MB, cancellation, and a second checksum check before opening the installer. |
 
 ### Drop a file in. Keep listening.
 
@@ -143,6 +155,61 @@ require a supported JavaScript runtime and yt-dlp EJS support. MP3 conversion ne
 FFmpeg on `PATH`. Tools are external and are not installed automatically. Save only
 content you own or have permission to download.
 
+## GitHub builds and updates
+
+Settings now offers an explicit **Check for updates → Download → Open installer**
+flow. Stable releases must match the exact platform/package, use the trusted
+GitHub source, stay below 100 MB and provide a valid SHA-256 digest. Packages
+are checked again before opening. Windows reuses the per-user installer; Linux
+opens its `.deb` in the system package installer. Your library stays intact.
+There are no embedded GitHub credentials or automatic downloads.
+
+**This repository is intentionally private.** Anonymous in-app checks cannot
+access its private releases, and the workflow below skips all jobs while private.
+Public release distribution and the Linux build are on hold; the Windows app can
+still be built and installed locally.
+
+The [desktop workflow](.github/workflows/desktop-build.yml) builds the Windows
+setup `.exe` and native Linux `.deb` on **standard public-repository runners**.
+It refuses private-repository execution, uses no Actions cache/artifact storage,
+and keeps generated build directories out of Git. Version tags attach only
+final packages, platform-specific checksums and metadata to a **draft release**.
+Review both jobs and publish that draft before the in-app updater can find it.
+Main/PR runs are build checks and retain no installer artifacts.
+
+Under [GitHub's current public-runner pricing](https://docs.github.com/en/billing/concepts/product-billing/github-actions),
+this setup uses free execution. Release assets are distributed separately from
+billable Actions storage. No paid runner, LFS, cloud relay or subscription is
+required. This describes this workflow; it does not change account-wide billing
+settings or other repositories.
+
+### Nearby music sharing
+
+**Windows 0.6.0:** use the Share icon in **Library** or **Songs**, then choose
+**Monolith app** (same Wi-Fi/Ethernet) or **Bluetooth**. Select reveals row
+checkboxes and a toolbar for sharing a batch, adding songs to playlists,
+creating a populated playlist or removing entries after confirmation.
+Current, selected and hovered songs use distinct colors in both themes.
+
+Wi-Fi automatically discovers receiving Monolith devices and matches the
+selected device's certificate internally over TLS 1.3. Choose a device; the
+recipient accepts each song. No verification codes to copy. Bluetooth uses authenticated encrypted
+RFCOMM pairing. Both reuse bounded offers, explicit approval, audio/SHA-256
+validation, atomic no-overwrite saves and importer receipts. Share up to 100
+songs, each up to 100 MB; each song has its own approval and receipt.
+No account, cloud relay or paid service.
+Sharing stays off at startup. Open Share to discover devices; Receive starts
+the foreground listener. Close or Cancel closes its sharing sockets.
+The Songs guide spotlights Share and Select in its third step. Discovery names
+are local hints, not verified identities; use a trusted network.
+
+Separate-device interoperability and the mobile bridge remain unverified.
+This Windows machine has no Bluetooth radio. Linux shares the portable LAN
+source/UI; native Linux/.deb execution and BlueZ/iPhone Bluetooth remain pending.
+Read the [wire contract](docs/nearby-music.md), [JSON fixtures](docs/bluetooth-wire-fixtures.json)
+and [mobile-agent prompt](docs/mobile-sharing-agent-prompt.md).
+
+
 ## Architecture
 
 ```mermaid
@@ -159,6 +226,16 @@ flowchart TB
     Tool --> Stage["Temporary output → completed file"]
     Stage --> Files
     UI -.-> Windows["Windows media controls / tray / acrylic"]
+    UI --> Update["Update worker · explicit checks"]
+    UI --> Nearby["Sharing worker · selected song IDs"]
+    Nearby --> Consent["Bounded offer → recipient approval"]
+    Consent --> LAN["Same network · pinned TLS 1.3"]
+    Consent --> Bluetooth["Windows · paired encrypted RFCOMM"]
+    LAN --> Receipt["Validate audio + hash → no-overwrite save"]
+    Bluetooth --> Receipt
+    Receipt --> Worker
+    Update --> GitHub["GitHub stable release assets"]
+    Update --> Setup["Size/hash-verified native installer"]
 ```
 
 Filesystem work and metadata parsing run off the UI thread. Transfers use argument
@@ -200,39 +277,35 @@ The installer also builds the player when the override is absent, using the main
 
 ### Storage and verification
 
-Rust build caches are much larger than the shipped application. `target/` and
-`installer/target/` are generated and ignored by Git, as are local captures and
-`dist/`. Building debug and release profiles keeps separate artifacts. Retain
-release packages before cleaning caches; dependency sources remain in Cargo's
-separate cache.
+Windows **0.6.0**, verified 2026-10-11: 39 release core tests, serial
+all-target/format checks, source privacy audit and offline player/setup passed.
+Four guide scenarios and installed native fixture checks cover title playback,
+sharing choices, three-song selection, populated playlist creation, confirmed
+removal and preserved original files. Socket checks verify sharing stays off
+before Share and stops after Cancel/Close. Explicit Receive opens its foreground
+listener. No copied verification code is required.
 
-A debug-cache cleanup reclaimed 5.15 GiB on the verification machine. Debug and
-release artifacts stay outside Git; an IDE may regenerate debug artifacts when
-it checks the project again.
+The installed player matches release bytes; existing library and local portrait
+hashes are unchanged. Sharing process working set: 48.1 MiB; private: 11.8 MiB. This is a spot sample, not a transfer-peak measurement.
+Player: **32,649,728 bytes**, SHA-256
+`b2157425065f24bab66e4097f14b25dc05b804b113bec872f18bbcbff0a65f29`.
+Setup: **48,299,008 bytes**, SHA-256
+`3c2e61962c26d5ffa4d875f01e67d678b6288b50e42a4c7d81a51223fefad94d`.
+Approved dependency downloads plus conservatively counted index files: ~8.9 MB.
+Real-device Wi-Fi/Bluetooth, mobile bridges and native Linux remain pending.
+Linux tool downloads already exceed the 100 MB cap; no Linux package was built.
+Repository stays private, with no publication or paid workflow run.
 
-Windows verification includes 26 core tests and 4 artwork tests (including
-bounded WebP and corrupt embedded pictures), playback/persistence workflows,
-transfer handling, live folder detection and pointer/keyboard checks. Renderer
-checks verify seek, volume and download fills from their left edge at multiple
-values. Row activation covers titles, details and spacing as well as artwork. Screenshots
-cover compact and wide layouts; glyph checks exercise software and GPU renderers.
-The modal guide passes Next/Back, Tab/Shift+Tab, Escape and background input checks
-at 1280×820, 760×600 and 420×380, including a collapsed rail and light mode. Its
-cards follow real controls across all five tabs. Guide scenarios include empty
-libraries, scrolled songs and both renderers. Pixel checks verify full target
-brightness and no bubble overlap. Help restarts after completing or closing the
-tour. Warning checks cover Cancel/Remove, playlist identity and background
-isolation; moved-file recovery passes through the real Windows file picker.
-An earlier October 10 Windows build passed nine native tray restore cycles across
-solid, translucent and maximized windows. The latest update repeats three solid
-and three acrylic tray restores, with complete repaint and unchanged window size.
-Installation matched the verified player bytes and preserved the library database.
-The subsequent backed-up repair also preserved song identity, favorites, playlists
-and the audio files. Default software rendering during playback with a 157-song
-library copy measured 44.9 MB working set, 13.2 MB private memory and no child
-processes in a short ten-second sample. This is not a large-library or playback-peak
-guarantee; the target remains ≤130 MB including child processes. Linux builds
-remain deferred under the 100 MB download cap.
+Rust build caches are larger than shipped packages. `target/`,
+`installer/target/`, `dist/` and local test captures stay outside Git. Retaining
+Cargo dependencies and release caches avoids unnecessary downloads on the next
+build. Disposable session fixtures and edit scripts were removed.
+
+The playback memory target remains ≤130 MB including child processes; short
+fixture samples do not establish peak usage. Earlier Windows checks cover local
+artwork, folder imports, persistence, tray repaint, seek/volume fills, removal
+warnings and moved-file recovery. Their historical evidence stays in local agent
+notes rather than duplicating outdated package hashes here.
 
 Physical DPI transitions, screen-reader announcements, large-library performance,
 real download peaks and Linux runtime still need verification. See the examples
@@ -256,9 +329,12 @@ libraries. Cross-device sync is not implemented.
 
 ## Project assets and licence
 
-The developer credit is part of the product. Its generated identity and portrait
-payloads are required build inputs; obfuscation is not encryption. Original source
-portraits and private working transcripts are not needed to build the app.
+The developer credit uses public project attribution and the Monolith product
+mark by default. A local `developer-photo.png` in the application-data folder
+can replace that mark on this installation; the file stays outside Git and release
+packages and survives updates. Missing, oversized or invalid PNGs fall back to
+the product mark. Display obfuscation is not encryption. Private transcripts, credentials, personal library data and build
+caches are not product source and must stay out of Git and release packages.
 
 Proprietary licence — see [LICENSE](LICENSE). Built with [Slint](https://slint.dev),
 [Rodio](https://github.com/RustAudio/rodio), [rusqlite](https://github.com/rusqlite/rusqlite)

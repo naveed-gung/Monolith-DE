@@ -5,6 +5,8 @@
 mod controller;
 mod crash_ui;
 mod native;
+mod nearby_ui;
+mod update_ui;
 use controller::Command;
 use monolith_desktop::{
     crash, identity,
@@ -91,12 +93,16 @@ fn run() -> Result<()> {
         std::time::Duration::from_secs(24 * 60 * 60),
     );
     let downloader = db.setting("downloader", "");
+    // Local portrait stays outside Git/packages and survives app updates.
+    // Resolve disk I/O before creating the UI/event loop.
+    let developer_photo = identity::avatar_from(&data).unwrap_or_default();
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name(if low_power { "software" } else { "femtovg" }.into())
         .with_winit_window_attributes_hook(|a| a.with_transparent(true))
         .select()?;
     let app = AppWindow::new()?;
+    let _updater = update_ui::Updater::bind(&app, data.join("updates"));
     app.set_low_power(low_power);
     app.set_system_light(native::system_light_theme());
     app.set_theme_follow_system(theme_follow_system);
@@ -124,7 +130,7 @@ fn run() -> Result<()> {
         app.set_dev_portfolio(who.portfolio.into());
         app.set_dev_github_url(who.github_url.into());
         app.set_dev_portfolio_url(who.portfolio_url.into());
-        app.set_dev_photo(identity::portrait().unwrap_or_default());
+        app.set_dev_photo(developer_photo);
     }
     {
         // Opening a browser must not block the UI thread, and must not be
@@ -169,6 +175,7 @@ fn run() -> Result<()> {
     let (tx, rx) = mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let worker = controller::spawn(db, app.as_weak(), rx, tx.clone(), cancel.clone());
+    let sharing = nearby_ui::Sharing::bind(&app, data.clone(), tx.clone())?;
     macro_rules! bind {
         ($method:ident,$variant:ident) => {{
             let sender = tx.clone();
@@ -207,6 +214,39 @@ fn run() -> Result<()> {
     bind!(on_request_thumbnail, Thumbnail, i64);
     bind!(on_favorite_track, Favorite, i64);
     bind!(on_remove_track, Remove, i64);
+    bind!(on_toggle_selection, Select, i64);
+    bind!(on_select_visible, SelectVisible, bool);
+    bind!(on_clear_selection, ClearSelection);
+    {
+        let sender = tx.clone();
+        app.on_batch_remove(move |ids| {
+            let _ = sender.send(Command::Batch(
+                ids.iter().map(|id| id as i64).collect(),
+                monolith_desktop::library::BatchAction::Remove,
+            ));
+        });
+        let sender = tx.clone();
+        app.on_batch_remove_playlist(move |ids, playlist| {
+            let _ = sender.send(Command::Batch(
+                ids.iter().map(|id| id as i64).collect(),
+                monolith_desktop::library::BatchAction::RemoveFrom(playlist as i64),
+            ));
+        });
+        let sender = tx.clone();
+        app.on_batch_add(move |ids, playlist| {
+            let _ = sender.send(Command::Batch(
+                ids.iter().map(|id| id as i64).collect(),
+                monolith_desktop::library::BatchAction::AddTo(playlist as i64),
+            ));
+        });
+        let sender = tx.clone();
+        app.on_batch_create(move |ids, name| {
+            let _ = sender.send(Command::Batch(
+                ids.iter().map(|id| id as i64).collect(),
+                monolith_desktop::library::BatchAction::CreatePlaylist(name.to_string()),
+            ));
+        });
+    }
     {
         let tx = tx.clone();
         app.on_remove_from_playlist(move |id, playlist| {
@@ -488,6 +528,7 @@ fn run() -> Result<()> {
     #[cfg(windows)]
     drop(integration);
     cancel.store(true, Ordering::Relaxed);
+    drop(sharing);
     let _ = tx.send(Command::Shutdown);
     let _ = worker.join();
     outcome?;

@@ -118,6 +118,13 @@ pub struct Track {
     pub favorite: bool,
 }
 pub struct Library(pub Connection);
+/// Database-only bulk edits. Audio files are never deleted or moved.
+pub enum BatchAction {
+    Remove,
+    AddTo(i64),
+    RemoveFrom(i64),
+    CreatePlaylist(String),
+}
 impl Library {
     pub fn open(path: &Path) -> Result<Self> {
         let db = Connection::open(path)?;
@@ -368,6 +375,64 @@ impl Library {
         self.0
             .execute("INSERT INTO playlists(name) VALUES(?1)", [name])?;
         Ok(())
+    }
+    /// Validate the entire selection, then commit once. A stale row or playlist
+    /// rolls back the whole operation instead of partially editing a collection.
+    pub fn apply_batch(&mut self, ids: &[i64], action: BatchAction) -> Result<usize> {
+        let ids: std::collections::BTreeSet<i64> = ids.iter().copied().collect();
+        if ids.is_empty() || ids.len() > 20_000 {
+            return Err("Select between 1 and 20,000 songs.".into());
+        }
+        let tx = self.0.transaction()?;
+        for id in &ids {
+            if *id <= 0
+                || !tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tracks WHERE id=?1)",
+                    [id],
+                    |r| r.get::<_, bool>(0),
+                )?
+            {
+                return Err("A selected song no longer exists. Refresh your selection.".into());
+            }
+        }
+        let (sql, playlist) = match action {
+            BatchAction::Remove => ("DELETE FROM tracks WHERE id=?2", 0),
+            BatchAction::AddTo(id) | BatchAction::RemoveFrom(id) => {
+                if id <= 0
+                    || !tx.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM playlists WHERE id=?1)",
+                        [id],
+                        |r| r.get::<_, bool>(0),
+                    )?
+                {
+                    return Err("Choose an existing playlist.".into());
+                }
+                (
+                    if matches!(action, BatchAction::AddTo(_)) {
+                        "INSERT OR IGNORE INTO playlist_tracks VALUES(?1,?2)"
+                    } else {
+                        "DELETE FROM playlist_tracks WHERE playlist_id=?1 AND track_id=?2"
+                    },
+                    id,
+                )
+            }
+            BatchAction::CreatePlaylist(name) => {
+                let name = clean_name(&name);
+                if name.is_empty() || name.chars().count() > 80 {
+                    return Err("Playlist name must be 1–80 characters.".into());
+                }
+                tx.execute("INSERT INTO playlists(name) VALUES(?1)", [name])?;
+                (
+                    "INSERT INTO playlist_tracks VALUES(?1,?2)",
+                    tx.last_insert_rowid(),
+                )
+            }
+        };
+        for id in &ids {
+            tx.execute(sql, params![playlist, id])?;
+        }
+        tx.commit()?;
+        Ok(ids.len())
     }
     /// Track ids belonging to a custom playlist, used to filter the in-memory
     /// library without hitting the database on every search keystroke.
@@ -833,6 +898,48 @@ mod tests {
         db.remove(id)?;
         assert!(db.tracks(playlist)?.is_empty());
         assert_eq!(std::fs::read(original)?, b"untouched");
+        Ok(())
+    }
+    #[test]
+    fn batch_edits_are_atomic_and_keep_audio_files() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut db = Library::open(&dir.path().join("library.sqlite3"))?;
+        let mut ids = Vec::new();
+        for name in ["one.wav", "two.wav"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, b"original")?;
+            db.0.execute("INSERT INTO tracks(path,title,artist,album,seconds) VALUES(?1,?2,'Artist','Album',60)",params![path.to_str(),name])?;
+            ids.push(db.0.last_insert_rowid());
+        }
+        assert!(db.apply_batch(&[ids[0], 999], BatchAction::Remove).is_err());
+        assert_eq!(db.tracks(0)?.len(), 2);
+        assert!(
+            db.apply_batch(&ids, BatchAction::CreatePlaylist(" ".into()))
+                .is_err()
+        );
+        assert!(db.playlists()?.is_empty());
+        assert_eq!(
+            db.apply_batch(&ids, BatchAction::CreatePlaylist("Evening".into()))?,
+            2
+        );
+        let playlist = db.playlists()?[0].0;
+        assert_eq!(db.tracks(playlist)?.len(), 2);
+        assert!(
+            db.apply_batch(&ids, BatchAction::CreatePlaylist("Evening".into()))
+                .is_err()
+        );
+        assert_eq!(db.playlists()?.len(), 1);
+        assert!(db.apply_batch(&ids, BatchAction::AddTo(999)).is_err());
+        db.apply_batch(&ids, BatchAction::RemoveFrom(playlist))?;
+        assert!(db.tracks(playlist)?.is_empty());
+        db.apply_batch(&[ids[0], ids[0], ids[1]], BatchAction::AddTo(playlist))?;
+        assert_eq!(db.tracks(playlist)?.len(), 2);
+        db.apply_batch(&ids, BatchAction::Remove)?;
+        assert!(db.tracks(0)?.is_empty());
+        assert!(db.tracks(playlist)?.is_empty());
+        for name in ["one.wav", "two.wav"] {
+            assert_eq!(std::fs::read(dir.path().join(name))?, b"original");
+        }
         Ok(())
     }
 }

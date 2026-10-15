@@ -46,7 +46,7 @@ Architecture: $arch
 Section: sound
 Priority: optional
 Maintainer: Monolith Desktop maintainers <maintainers@localhost>
-Depends: $deps, libxkbcommon0, libx11-6, libxcursor1, libxrandr2, libxi6, libwayland-client0, libwayland-cursor0, libegl1, libgl1
+Depends: $deps, libxkbcommon0, libx11-6, libxcursor1, libxrandr2, libxi6, libwayland-client0, libwayland-cursor0, libegl1, libgl1, curl, ca-certificates, xdg-utils
 Recommends: xdg-desktop-portal
 Installed-Size: $(du -sk "$stage/usr" | cut -f1)
 Description: Native local music player

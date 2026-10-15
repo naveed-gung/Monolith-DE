@@ -2,7 +2,7 @@ import { TourTarget, TourAnchor } from "guide.slint";
 import { Theme } from "theme.slint";
 import { NavGlyph } from "glyphs.slint";
 import { ListView } from "std-widgets.slint";
-import { Button, ButtonKind, IconButton, TextField, Chip, StatusBar, SectionLabel, Caption } from "controls.slint";
+import { Button, ButtonKind, IconButton, TextField, Chip, StatusBar, SectionLabel, Caption, SelectionBox } from "controls.slint";
 
 export struct TrackRow {
     id: int,
@@ -10,7 +10,8 @@ export struct TrackRow {
     detail: string,
     duration: string,
     favorite: bool,
-    thumbnail: image
+    thumbnail: image,
+    selected: bool
 }
 
 component TrackItem inherits Rectangle {
@@ -21,6 +22,8 @@ component TrackItem inherits Rectangle {
     in property <bool> compact;
     in property <bool> custom-list;
     in property <bool> can-add;
+    in property <bool> selecting;
+    callback toggle-selection;
     callback request-thumbnail(int);
     private property <int> art-id: root.track.id;
     init => { if !root.preview { root.request-thumbnail(root.art-id); } }
@@ -31,22 +34,24 @@ component TrackItem inherits Rectangle {
     callback remove;
 
     private property <bool> focus-visible;
-    private property <bool> hot: touch.has-hover || heart.hovered || collect-button.hovered || remove-button.hovered;
+    private property <bool> hot: touch.has-hover;
     height: 52px;
     forward-focus: focus;
     accessible-role: list-item;
     accessible-label: root.track.title;
     accessible-description: root.track.detail;
     accessible-enabled: !root.preview;
-    accessible-action-default => { if !root.preview { root.activate(); } }
+    accessible-action-default => { if !root.preview { if root.selecting { root.toggle-selection(); } else { root.activate(); } } }
     Rectangle {
         x: 0px;
         width: parent.width;
         height: parent.height;
         border-radius: Theme.radius-control;
-        background: root.current ? Theme.accent-soft : root.hot ? Theme.hover : transparent;
-        border-width: root.focus-visible ? 2px : 0px;
-        border-color: Theme.accent;
+        background: root.selecting && root.track.selected ? root.hot ? Theme.row-selected-hover : Theme.row-selected
+            : root.current ? root.hot ? Theme.row-current-hover : Theme.row-current
+            : root.hot ? Theme.row-hover : transparent;
+        border-width: root.focus-visible ? 2px : root.hot || (root.selecting && root.track.selected) ? 1px : 0px;
+        border-color: root.focus-visible ? Theme.accent : root.selecting && root.track.selected ? Theme.secondary.with-alpha(0.45) : Theme.border-strong;
         animate background { duration: Theme.fast; }
         focus := FocusScope {
             enabled: !root.preview;
@@ -55,7 +60,7 @@ component TrackItem inherits Rectangle {
             focus-lost(reason) => { root.focus-visible = false; }
             key-pressed(event) => {
                 if event.text == " " || event.text == "\n" {
-                    root.activate();
+                    if root.selecting { root.toggle-selection(); } else { root.activate(); }
                     return accept;
                 }
                 return reject;
@@ -75,11 +80,15 @@ component TrackItem inherits Rectangle {
             padding-right: 6px;
             spacing: 8px;
             cross-axis-alignment: center;
+            if root.selecting: SelectionBox {
+                checked: root.track.selected; label: "Select " + root.track.title;
+                clicked => { root.toggle-selection(); }
+            }
             Rectangle {
                 width: 40px; height: 40px;
                 border-radius: 7px;
                 background: Theme.raised;
-                private property <bool> reveal: root.hot || root.focus-visible || (root.current && root.playing);
+                private property <bool> reveal: !root.selecting && (root.hot || root.focus-visible || (root.current && root.playing));
                 accessible-role: none;
                 Image { width: parent.width; height: parent.height; source: root.track.thumbnail; }
                 if root.track.thumbnail.width == 0: NavGlyph {
@@ -106,51 +115,54 @@ component TrackItem inherits Rectangle {
                 horizontal-stretch: 1;
                 Text {
                     text: root.track.title;
-                    color: root.current ? Theme.accent : Theme.foreground;
+                    color: root.selecting && root.track.selected ? Theme.foreground : root.current ? Theme.row-current-ink : Theme.foreground;
                     font-size: Theme.type-body;
                     font-weight: root.current ? 600 : 500;
                     overflow: elide;
                     animate color { duration: Theme.fast; }
                 }
-                Text { text: root.track.detail; color: Theme.muted; font-size: Theme.type-label; overflow: elide; }
+                Text { text: root.track.detail; color: root.hot || (root.selecting && root.track.selected) ? Theme.secondary : Theme.muted; font-size: Theme.type-label; overflow: elide; }
             }
             if !root.compact: Text {
                 text: root.track.duration;
                 width: 46px;
-                color: Theme.muted;
+                color: root.hot || (root.selecting && root.track.selected) ? Theme.secondary : Theme.muted;
                 font-size: Theme.type-label;
                 horizontal-alignment: right;
             }
             Rectangle { width: 4px; }
-            heart := IconButton {
-                enabled: !root.preview;
-                icon: root.track.favorite ? @image-url("icons/heart-filled.svg") : @image-url("icons/heart.svg");
-                label: "Favorite";
-                checkable: true;
-                active: root.track.favorite;
-                clicked => { root.toggle-favorite(); }
-            }
-            collect-button := IconButton {
-                icon: root.custom-list ? @image-url("icons/list-minus.svg") : @image-url("icons/list-plus.svg");
-                label: root.custom-list ? "Remove from this playlist" : "Add to a playlist";
-                enabled: !root.preview && (root.custom-list || root.can-add);
-                clicked => { root.collect(); }
-            }
-            remove-button := IconButton {
-                enabled: !root.preview;
-                icon: @image-url("icons/x.svg");
-                label: "Remove from library; keep original file";
-                clicked => { root.remove(); }
+            if !root.selecting: HorizontalLayout {
+                spacing: 8px;
+                heart := IconButton {
+                    enabled: !root.preview;
+                    icon: root.track.favorite ? @image-url("icons/heart-filled.svg") : @image-url("icons/heart.svg");
+                    label: "Favorite";
+                    checkable: true;
+                    active: root.track.favorite;
+                    clicked => { root.toggle-favorite(); }
+                }
+                collect-button := IconButton {
+                    icon: root.custom-list ? @image-url("icons/list-minus.svg") : @image-url("icons/list-plus.svg");
+                    label: root.custom-list ? "Remove from this playlist" : "Add to a playlist";
+                    enabled: !root.preview && (root.custom-list || root.can-add);
+                    clicked => { root.collect(); }
+                }
+                remove-button := IconButton {
+                    enabled: !root.preview;
+                    icon: @image-url("icons/x.svg");
+                    label: "Remove from library; keep original file";
+                    clicked => { root.remove(); }
+                }
             }
         }
         // Foreground hit area includes artwork, title, detail, duration and gaps.
         // The three 40px actions and their spacing keep independent hit targets.
         touch := TouchArea {
             enabled: !root.preview;
-            x: 0px; y: 0px;
-            width: max(0px, parent.width - 142px);
+            x: root.selecting ? 48px : 0px; y: 0px;
+            width: max(0px, parent.width - (root.selecting ? 0px : 142px) - self.x);
             mouse-cursor: pointer;
-            clicked => { focus.focus(); root.activate(); }
+            clicked => { focus.focus(); if root.selecting { root.toggle-selection(); } else { root.activate(); } }
         }
     }
 }
@@ -239,6 +251,18 @@ component EmptyLibrary inherits Rectangle {
 }
 
 export component LibraryPage inherits Rectangle {
+    callback open-sharing;
+    in-out property <bool> selecting;
+    in property <[int]> selected-ids;
+    in property <[int]> playlist-ids;
+    in property <bool> all-visible-selected;
+    callback toggle-selection(int);
+    callback select-visible(bool);
+    callback clear-selection;
+    callback batch-remove;
+    callback batch-remove-playlist;
+    callback batch-add(int);
+    callback batch-create(string);
     in property <int> page;
     in property <int> total-tracks;
     in property <int> album-count;
@@ -275,6 +299,7 @@ export component LibraryPage inherits Rectangle {
     private property <bool> has-filter: root.page == 2 || root.total-tracks > 0 || root.demo;
     private property <int> pending-add-id: -1;
     private property <bool> creating: false;
+    private property <bool> adding-selected: false;
     private property <string> title: root.page == 0 ? "Library" : root.page == 1 ? "Songs" : "Search";
     private property <string> subtitle: root.total-tracks == 0
         ? "A focused home for the music already on this device"
@@ -288,6 +313,7 @@ export component LibraryPage inherits Rectangle {
     private property <TourTarget> search-area;
     private property <TourTarget> collections-area;
     private property <TourTarget> import-area;
+    private property <TourTarget> share-area;
     private property <TourTarget> new-area;
     private property <TourTarget> folder-area;
     private property <TourTarget> rows-area;
@@ -299,6 +325,7 @@ export component LibraryPage inherits Rectangle {
         ? { x: root.search-area.x, y: root.search-area.y, width: root.search-area.width, height: root.search-area.height }
         : root.tour-kind == 3
         ? { x: root.collections-area.x, y: root.collections-area.y, width: root.collections-area.width, height: root.collections-area.height }
+        : root.tour-kind == 8 ? root.share-area
         : root.tour-kind == 4
         ? root.new-area
         : root.tour-kind == 7 ? root.sort-area
@@ -338,6 +365,30 @@ export component LibraryPage inherits Rectangle {
 
                 vertical-stretch: 0;
                 spacing: 8px;
+                HorizontalLayout {
+                    vertical-stretch: 0; spacing: 8px;
+                    TourAnchor {
+                        step: root.tour-kind; viewport-width: root.width; viewport-height: root.height;
+                        target-width: parent.width; target-height: parent.height;
+                        measure(area) => { root.share-area = area; }
+                    }
+                    Button {
+                        text: "Share";
+                        label: "Share music";
+                        icon: @image-url("icons/share.svg");
+                        icon-only: true;
+                        enabled: !root.selecting || root.selected-ids.length > 0;
+                        clicked => { root.open-sharing(); }
+                    }
+                    Button {
+                        text: root.selecting ? "Done" : "Select";
+                        label: root.selecting ? "Finish selecting songs" : "Select songs";
+                        icon: @image-url("icons/check.svg"); icon-only: root.compact;
+                        kind: root.selecting ? ButtonKind.primary : ButtonKind.secondary;
+                        enabled: root.selecting || root.tracks.length > 0;
+                        clicked => { root.selecting = !root.selecting; root.clear-selection(); root.adding-selected = false; }
+                    }
+                }
                 Button {
                     TourAnchor {
                         step: root.tour-kind; viewport-width: root.width; viewport-height: root.height;
@@ -392,7 +443,7 @@ export component LibraryPage inherits Rectangle {
             new-playlist => { root.creating = true; root.playlist-name = ""; }
             import-playlist => { root.import-playlist(); }
         }
-        if root.has-filter: search := TextField {
+        if root.has-filter && !(root.selecting && root.short): search := TextField {
             TourAnchor {
                 step: root.tour-kind; viewport-width: root.width; viewport-height: root.height;
                 target-width: parent.width; target-height: parent.height;
@@ -411,7 +462,7 @@ export component LibraryPage inherits Rectangle {
         // Search is a text view over whichever of the two is active. The two
         // chip rows are mutually exclusive so the control under the search box
         // always means one thing.
-        if root.page == 0: collections := HorizontalLayout {
+        if root.page == 0 && !(root.selecting && root.short): collections := HorizontalLayout {
             TourAnchor {
                 step: root.tour-kind; viewport-width: root.width; viewport-height: root.height;
                 target-width: parent.width; target-height: parent.height;
@@ -449,7 +500,7 @@ export component LibraryPage inherits Rectangle {
                 clicked => { root.delete-playlist(); }
             }
         }
-        if root.page == 1: HorizontalLayout {
+        if root.page == 1 && !(root.selecting && root.short): HorizontalLayout {
             TourAnchor {
                 step: root.tour-kind; viewport-width: root.width; viewport-height: root.height;
                 target-width: parent.width; target-height: parent.height;
@@ -496,7 +547,7 @@ export component LibraryPage inherits Rectangle {
                     text <=> root.playlist-name;
                     accepted(text) => {
                         if text != "" {
-                            root.create-playlist(text);
+                            if root.selecting && root.selected-ids.length > 0 { root.batch-create(text); } else { root.create-playlist(text); }
                             root.creating = false;
                         }
                     }
@@ -506,7 +557,7 @@ export component LibraryPage inherits Rectangle {
                     text: "Create";
                     enabled: root.playlist-name != "";
                     clicked => {
-                        root.create-playlist(root.playlist-name);
+                        if root.selecting && root.selected-ids.length > 0 { root.batch-create(root.playlist-name); } else { root.create-playlist(root.playlist-name); }
                         root.creating = false;
                     }
                 }
@@ -517,7 +568,7 @@ export component LibraryPage inherits Rectangle {
                 }
             }
         }
-        if root.pending-add-id >= 0: Rectangle {
+        if root.pending-add-id >= 0 || root.adding-selected: Rectangle {
             min-height: 54px;
             max-height: 54px;
             vertical-stretch: 0;
@@ -542,7 +593,8 @@ export component LibraryPage inherits Rectangle {
                                 text: name;
                                 icon: @image-url("icons/playlist.svg");
                                 clicked => {
-                                    root.add-to-playlist(root.pending-add-id, index);
+                                    if root.adding-selected { root.batch-add(root.playlist-ids[index]); } else { root.add-to-playlist(root.pending-add-id, index); }
+                                    root.adding-selected = false;
                                     root.pending-add-id = -1;
                                 }
                             }
@@ -552,12 +604,26 @@ export component LibraryPage inherits Rectangle {
                 Button {
                     kind: ButtonKind.ghost;
                     text: "Cancel";
-                    clicked => { root.pending-add-id = -1; }
+                    clicked => { root.pending-add-id = -1; root.adding-selected = false; }
                 }
             }
         }
+        if root.selecting: Rectangle {
+            height: 48px; background: Theme.surface-strong; border-radius: Theme.radius-control;
+            border-width: 1px; border-color: Theme.border-strong;
+            HorizontalLayout {
+                padding: 4px; spacing: 4px; cross-axis-alignment: center;
+                SelectionBox { checked: root.all-visible-selected; label: "Select all visible songs"; clicked => { root.select-visible(!root.all-visible-selected); } }
+                Text { text: "\{root.selected-ids.length} selected"; color: Theme.foreground; font-size: Theme.type-label; horizontal-stretch: 1; overflow: elide; }
+                IconButton { icon: @image-url("icons/share.svg"); label: "Share selected songs"; enabled: root.selected-ids.length > 0; clicked => { root.open-sharing(); } }
+                IconButton { icon: @image-url("icons/list-plus.svg"); label: "Add selected songs to a playlist"; enabled: root.selected-ids.length > 0; clicked => { root.adding-selected = !root.adding-selected; } }
+                IconButton { icon: @image-url("icons/plus.svg"); label: "Create playlist from selected songs"; enabled: root.selected-ids.length > 0; clicked => { root.creating = !root.creating; root.playlist-name = ""; } }
+                if root.page == 0 && root.playlist-index > 1: IconButton { icon: @image-url("icons/list-minus.svg"); label: "Remove selected songs from this playlist"; enabled: root.selected-ids.length > 0; clicked => { root.batch-remove-playlist(); } }
+                IconButton { icon: @image-url("icons/trash.svg"); label: "Remove selected songs from library"; enabled: root.selected-ids.length > 0; clicked => { root.batch-remove(); } }
+            }
+        }
         if root.tracks.length > 0: Rectangle {
-            vertical-stretch: 1; min-height: 80px;
+            vertical-stretch: 1; min-height: root.selecting && root.short ? 0px : 80px;
             TourAnchor {
                 step: root.tour-kind; viewport-width: root.width; viewport-height: root.height; offset: rows.viewport-y;
                 target-width: parent.width; target-height: parent.height;
@@ -573,6 +639,8 @@ export component LibraryPage inherits Rectangle {
                 horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
                 for track in root.tracks: TrackItem {
                     track: track;
+                    selecting: root.selecting;
+                    toggle-selection => { root.toggle-selection(track.id); }
                     request-thumbnail(id) => { root.request-thumbnail(id); }
                     current: root.current-id == track.id;
                     playing: root.playing;
@@ -605,7 +673,7 @@ export component LibraryPage inherits Rectangle {
                     measure(area) => { root.demo-area = area; }
                 }
                 preview: true; compact: root.compact || root.short;
-                track: { id: -1, title: "Your next favorite", detail: "Example artist · Example album", duration: "3:20", favorite: false, thumbnail: @image-url("icons/record.svg") };
+                track: { id: -1, title: "Your next favorite", detail: "Example artist · Example album", duration: "3:20", favorite: false, thumbnail: @image-url("icons/record.svg"), selected: false };
             }
         }
         if !root.demo && root.tracks.length == 0 && (root.total-tracks > 0 || root.page == 2): VerticalLayout {

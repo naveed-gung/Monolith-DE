@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.set_dev_portfolio(who.portfolio.into());
         ui.set_dev_github_url(who.github_url.into());
         ui.set_dev_portfolio_url(who.portfolio_url.into());
-        ui.set_dev_photo(identity::portrait().unwrap_or_default());
+        ui.set_dev_photo(identity::avatar().unwrap_or_default());
     }
     ui.set_selected_page(page);
     if mode == Some("light") {
@@ -78,6 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 detail: format!("Artist {id} · Album {}", (id + 2) / 3).into(),
                 duration: format!("{}:{:02}", 2 + id % 3, (id * 7) % 60).into(),
                 favorite: id % 4 == 0,
+                selected: false,
                 thumbnail: if id % 3 == 0 {
                     slint::Image::default()
                 } else {

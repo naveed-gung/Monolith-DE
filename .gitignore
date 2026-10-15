@@ -26,3 +26,7 @@
 /assets/profile.jpg
 /assets/profile-card.png
 /tools/encrypt_identity.py
+
+# Never publish personal profile payloads, including reversibly obfuscated copies.
+/assets/profile-card.enc
+**/developer-photo.png

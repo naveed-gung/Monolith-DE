@@ -18,6 +18,7 @@ use std::{
 
 pub enum Command {
     Import(Vec<PathBuf>),
+    Shared(PathBuf, mpsc::Sender<std::result::Result<(), String>>),
     ImportPlaylist(PathBuf),
     PruneMissing,
     Folder(PathBuf),
@@ -39,6 +40,10 @@ pub enum Command {
     Volume(f32),
     Favorite(i64),
     Remove(i64),
+    Select(i64),
+    SelectVisible(bool),
+    ClearSelection,
+    Batch(Vec<i64>, library::BatchAction),
     NewPlaylist(String),
     DeletePlaylist(i64),
     AddToPlaylist(i64, usize),
@@ -68,6 +73,7 @@ struct Worker {
     ui: slint::Weak<AppWindow>,
     all: Vec<Track>,
     visible: Vec<i64>,
+    selected: std::collections::HashSet<i64>,
     playlists: Vec<(i64, String)>,
     /// Membership per playlist id, so filtering never has to re-query.
     members: std::collections::HashMap<i64, std::collections::HashSet<i64>>,
@@ -173,6 +179,7 @@ impl Worker {
         }
         // Artwork for tracks that no longer exist would never be evicted.
         let live: std::collections::HashSet<i64> = self.all.iter().map(|t| t.id).collect();
+        self.selected.retain(|id| live.contains(id));
         self.art.retain(|id, _| live.contains(id));
         self.art_order.retain(|id| live.contains(id));
         Ok(())
@@ -260,7 +267,14 @@ impl Worker {
         let playlist_ids = ids.iter().map(|id| *id as i32).collect::<Vec<_>>();
         let filter = self.filter as i32;
         let history = self.db.history()?;
+        let selected = self.selected.clone();
+        let mut selected_ids: Vec<i32> = selected.iter().map(|id| *id as i32).collect();
+        selected_ids.sort_unstable();
+        let all_visible_selected =
+            !self.visible.is_empty() && self.visible.iter().all(|id| selected.contains(id));
         update(&self.ui, move |ui| {
+            ui.set_selected_ids(ModelRc::new(VecModel::from(selected_ids)));
+            ui.set_all_visible_selected(all_visible_selected);
             ui.set_tracks(ModelRc::new(VecModel::from(
                 tracks
                     .into_iter()
@@ -270,6 +284,7 @@ impl Worker {
                         detail: format!("{} · {}", t.artist, t.album).into(),
                         duration: library::clock(t.seconds).into(),
                         favorite: t.favorite,
+                        selected: selected.contains(&t.id),
                         ..Default::default()
                     })
                     .collect::<Vec<_>>(),
@@ -532,6 +547,10 @@ impl Worker {
     fn step(&mut self, cmd: Command) -> Result<()> {
         match cmd {
             Command::Import(paths) => self.import(paths)?,
+            Command::Shared(path, reply) => {
+                let result = self.db.import(&path).and_then(|_| self.refresh());
+                let _ = reply.send(result.map_err(|e| e.to_string()));
+            }
             Command::PruneMissing => {
                 update(&self.ui, |u| u.set_busy(true));
                 let removed = self.db.prune_missing();
@@ -663,6 +682,47 @@ impl Worker {
             Command::Favorite(id) => {
                 self.db.favorite(id)?;
                 self.refresh()?
+            }
+            Command::Select(id) => {
+                if self.visible.contains(&id) && !self.selected.remove(&id) {
+                    self.selected.insert(id);
+                }
+                self.apply_filter()?;
+            }
+            Command::SelectVisible(yes) => {
+                for id in &self.visible {
+                    if yes {
+                        self.selected.insert(*id);
+                    } else {
+                        self.selected.remove(id);
+                    }
+                }
+                self.apply_filter()?;
+            }
+            Command::ClearSelection => {
+                self.selected.clear();
+                self.apply_filter()?;
+            }
+            Command::Batch(ids, action) => {
+                let removing = matches!(action, library::BatchAction::Remove);
+                let count = self.db.apply_batch(&ids, action)?;
+                if removing {
+                    let removed: std::collections::HashSet<_> = ids.into_iter().collect();
+                    self.queue.retain(|id| !removed.contains(id));
+                    if self.current.is_some_and(|id| removed.contains(&id)) {
+                        self.audio.take();
+                        self.current = None;
+                        self.position = 0.;
+                    }
+                    self.persist()?;
+                    self.show_player();
+                }
+                self.selected.clear();
+                self.refresh()?;
+                status(
+                    &self.ui,
+                    format!("Updated {count} selected songs. Original files kept."),
+                );
             }
             Command::Remove(id) => {
                 self.db.remove(id)?;
@@ -802,6 +862,7 @@ pub fn spawn(
             ui,
             all: vec![],
             visible: vec![],
+            selected: std::collections::HashSet::new(),
             playlists: vec![],
             members: std::collections::HashMap::new(),
             filter: 0,

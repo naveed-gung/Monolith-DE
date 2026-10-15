@@ -5,6 +5,7 @@ import { AppShell } from "shell.slint";
 import { TourTarget } from "guide.slint";
 import { TrackRow } from "library.slint";
 import { Button, ButtonKind } from "controls.slint";
+export { NearbyWindow } from "nearby.slint";
 
 // The root component is intentionally thin. It preserves the stable public API
 // consumed by Rust while the redesigned desktop surfaces live in focused files.
@@ -78,6 +79,10 @@ export component AppWindow inherits Window {
     in property <string> download-history <=> shell.download-history;
     in property <float> download-progress <=> shell.download-progress;
     in property <bool> downloading <=> shell.downloading;
+    in property <string> update-status <=> shell.update-status;
+    in property <bool> update-busy <=> shell.update-busy;
+    in property <bool> update-available <=> shell.update-available;
+    in property <bool> update-ready <=> shell.update-ready;
     in property <string> dev-name <=> shell.dev-name;
     in property <string> dev-role <=> shell.dev-role;
     in property <string> dev-portfolio <=> shell.dev-portfolio;
@@ -122,6 +127,21 @@ export component AppWindow inherits Window {
     callback cancel-download;
     callback open-link(string);
     callback open-settings;
+    in-out property <bool> selecting <=> shell.selecting;
+    in property <[int]> selected-ids <=> shell.selected-ids;
+    in property <bool> all-visible-selected <=> shell.all-visible-selected;
+    callback toggle-selection(int);
+    callback select-visible(bool);
+    callback clear-selection;
+    callback batch-remove([int]);
+    callback batch-remove-playlist([int], int);
+    callback batch-add([int], int);
+    callback batch-create([int], string);
+    callback open-sharing;
+    callback check-update;
+    callback download-update;
+    callback install-update;
+    callback cancel-update;
     callback theme-hint-dismissed;
     callback guide-done;
     in-out property <int> unavailable-track-id <=> shell.unavailable-track-id;
@@ -170,6 +190,18 @@ export component AppWindow inherits Window {
         cancel-download => { root.cancel-download(); }
         open-link(url) => { root.open-link(url); }
         open-settings => { root.open-settings(); }
+        toggle-selection(id) => { root.toggle-selection(id); }
+        select-visible(yes) => { root.select-visible(yes); }
+        clear-selection => { root.clear-selection(); }
+        batch-remove(ids) => { root.batch-remove(ids); }
+        batch-remove-playlist(ids, playlist) => { root.batch-remove-playlist(ids, playlist); }
+        batch-add(ids, playlist) => { root.batch-add(ids, playlist); }
+        batch-create(ids, name) => { root.batch-create(ids, name); }
+        open-sharing => { root.open-sharing(); }
+        check-update => { root.check-update(); }
+        download-update => { root.download-update(); }
+        install-update => { root.install-update(); }
+        cancel-update => { root.cancel-update(); }
         theme-hint-dismissed => { root.theme-hint-dismissed(); }
         guide-done => { root.guide-done(); }
         locate-track(id) => { root.locate-track(id); }

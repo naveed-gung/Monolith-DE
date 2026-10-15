@@ -10,6 +10,7 @@ installer is Windows-only; nothing here needs it.
 | Tray icon and media keys | System Media Transport Controls | Not wired up yet |
 | Translucent background | DWM acrylic | Not available, the toggle is disabled |
 | Icon and version resource | `assets/windows.rc` via `rc.exe` | Not built; the launcher uses the SVG |
+| Nearby sharing | Native encrypted RFCOMM implementation; hardware tests pending | Portable LAN TLS source/shared UI; native Linux build unverified. BlueZ Bluetooth pending with an explanation |
 | System theme | `AppsUseLightTheme` in the registry | `org.gnome.desktop.interface color-scheme` |
 | `smtc_check` example | built with `--features windows-smtc` | not built |
 
@@ -21,9 +22,10 @@ Ubuntu 24.04 or newer.
 
 ```sh
 sudo apt update
-sudo apt install -y build-essential pkg-config libasound2-dev \
+sudo apt install -y build-essential pkg-config dpkg-dev libasound2-dev \
                     libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev \
-                    libxi-dev libxcursor-dev libgl1-mesa-dev
+                    libxi-dev libxcursor-dev libgl1-mesa-dev libfontconfig1-dev \
+                    curl ca-certificates xdg-utils
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 
@@ -37,6 +39,16 @@ several minutes. Playback of local files needs no network. Downloads are explici
 `rfd` 0.17.2 defaults to the XDG portal backend; GTK development headers are
 not required by the current manifest. A running desktop portal is needed for
 file dialogs on Linux.
+
+Settings' explicit GitHub updater uses `curl` for HTTPS, streaming ring SHA-256
+for verification, and `xdg-open` for the system `.deb` installer.
+Debian packages declare these runtime requirements. Per-user installs need them
+available on the host. No package downloads or installation happen at startup.
+
+The public-only [GitHub workflow](../../.github/workflows/desktop-build.yml) builds
+native Linux packages on a standard Ubuntu runner. It retains no Actions cache
+or artifacts; version tags upload final packages/checksums to a draft Release.
+Cloud compilation and package installation remain unverified until that job runs.
 
 ## Build without a Linux machine
 
@@ -152,3 +164,12 @@ examples. Player titles open the expanded player. Reimported moved songs can
 reconnect to a unique old entry with a database backup and preserved collections.
 These changes have Windows verification only; a native Linux build and `.deb`
 remain deferred under the 100 MB download cap.
+
+The shared 0.6.0 source adds Library/Songs Share and selection controls, atomic
+bulk playlist/removal actions, distinct selected/hover colors and a sharing guide.
+Monolith app sharing uses portable Rust UDP discovery and TLS 1.3; networking
+starts only in the open Share picker, with an explicit five-minute Receive
+session. Close/Cancel shuts it down. No verification codes are copied.
+Linux execution is still unverified. Bluetooth's native adapter remains
+Windows-only; Linux BlueZ support is pending. The missing Linux target and
+linker alone exceed 128 MB, so no tools or `.deb` were downloaded/built here.

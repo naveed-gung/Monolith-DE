@@ -3,8 +3,8 @@
 // The numeric fields drive Explorer and GetFileVersionInfo; they must track
 // the string table below or Windows reports a stale version. `version.rs`
 // has a test that fails if these and Cargo.toml drift apart.
-FILEVERSION 0,3,0,0
-PRODUCTVERSION 0,3,0,0
+FILEVERSION 0,6,0,0
+PRODUCTVERSION 0,6,0,0
 FILEOS 0x40004L
 FILETYPE 0x1L
 BEGIN
@@ -13,9 +13,9 @@ BEGIN
   BLOCK "040904B0"
   BEGIN
    VALUE "FileDescription", "Monolith Desktop"
-   VALUE "FileVersion", "0.3.0"
+   VALUE "FileVersion", "0.6.0"
    VALUE "ProductName", "Monolith"
-   VALUE "ProductVersion", "0.3.0"
+   VALUE "ProductVersion", "0.6.0"
    VALUE "OriginalFilename", "monolith-desktop.exe"
    VALUE "CompanyName", "Monolith"
    VALUE "LegalCopyright", "Copyright (c) 2026 Naveed Gung"

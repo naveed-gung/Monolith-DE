@@ -1,8 +1,12 @@
+pub mod bluetooth;
 pub mod crash;
 pub mod identity;
 pub mod identity_data;
 pub mod inbox;
+pub mod lan;
 pub mod library;
+pub mod nearby;
 pub mod seal;
 pub mod transfer;
+pub mod updates;
 pub mod version;

@@ -47,6 +47,39 @@ component FocusRing inherits Rectangle {
     }
 }
 
+// Full-sized focus and pointer target around a compact selection mark.
+export component SelectionBox inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    in property <string> label;
+    callback clicked;
+    private property <bool> focus-visible;
+    width: 40px; height: 40px;
+    forward-focus: focus;
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    Rectangle {
+        x: 11px; y: 11px; width: 18px; height: 18px; border-radius: 5px;
+        border-width: root.checked ? 0px : 1.5px;
+        border-color: touch.has-hover || focus.has-focus ? Theme.foreground : Theme.secondary;
+        background: root.checked ? Theme.accent : Theme.surface;
+        animate background, border-color { duration: Theme.fast; }
+        if root.checked: Image { source: @image-url("icons/check.svg"); colorize: Theme.on-accent; }
+    }
+    FocusRing { shown: root.focus-visible; radius: 8px; }
+    touch := TouchArea { enabled: root.enabled; clicked => { focus.focus(); root.clicked(); } }
+    focus := FocusScope {
+        width: 0px; enabled: root.enabled;
+        focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+        focus-lost(reason) => { root.focus-visible = false; }
+        key-pressed(event) => { if event.text == " " || event.text == "\n" { root.clicked(); return accept; } return reject; }
+    }
+}
+
 export component Button inherits Rectangle {
     in property <string> text;
     in property <string> label: root.text;

@@ -61,6 +61,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&output)?;
     let ui = AppWindow::new()?;
     ui.set_reduce_motion(true);
+    // Help must leave bulk-selection mode before measuring guide targets.
+    ui.set_selecting(true);
     ui.set_rail_collapsed(width >= 900. && args.get(4).is_some_and(|s| s == "rail"));
     if args.get(4).is_some_and(|s| s == "light") {
         ui.set_light(true);
@@ -101,6 +103,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_favorite_track(move |_| count.set(count.get() + 1));
     let count = actions.clone();
     ui.on_import_files(move |_| count.set(count.get() + 1));
+    let count = actions.clone();
+    ui.on_open_sharing(move || count.set(count.get() + 1));
     let completed = Rc::new(Cell::new(0));
     let count = completed.clone();
     ui.on_guide_done(move || count.set(count.get() + 1));
@@ -142,6 +146,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let card = ui.get_guide_card_area();
             if ui.get_guide_step() == 13 {
                 assert!(target.width <= 280., "appearance spotlight fits its three choices");
+            }
+            if ui.get_guide_step() == 5 {
+                assert!(target.width <= 220. && target.height <= 44., "sharing spotlight fits Share and Select");
             }
             if ui.get_guide_step() == 14 {
                 assert!(target.width <= 130. && target.height <= 52., "folder spotlight fits the actual chooser, not the stretched row");
@@ -191,6 +198,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             1 => {
                 assert!(ui.get_guide_open()); assert_eq!(ui.get_guide_step(), 0);
+                assert!(!ui.get_selecting(), "Help exits selection before starting the tour");
                 for page in 0..5 { click(&ui, 36., nav_y(page)); }
                 click(&ui, width - 50., height - 40.);
                 click(&ui, rail + 150., 230.);
