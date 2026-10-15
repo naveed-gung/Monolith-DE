@@ -2,6 +2,12 @@
   <img src="assets/monolith-mark.png" width="80" alt="Monolith logo">
 </p>
 <h1 align="center">Monolith Desktop</h1>
+
+> [!NOTE]
+> **Development on hold**
+>
+> Monolith Desktop is currently on hold. New features and improvements are planned for a future update.
+
 <p align="center"><strong>Your music. A place of its own.</strong><br>Native local playback, a personal library, and a quiet coral interface.</p>
 <p align="center">
   <img alt="Version 0.3.0" src="https://img.shields.io/badge/version-0.3.0-E95668?style=flat-square">
