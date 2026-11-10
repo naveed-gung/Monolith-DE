@@ -2,18 +2,22 @@ import { TourTarget, TourAnchor } from "guide.slint";
 import { Theme } from "theme.slint";
 import { Version } from "version.slint";
 import { ScrollView } from "std-widgets.slint";
-import { Button, ButtonKind, Chip, Toggle, Card, Caption, SectionLabel, SquareImage, IconButton } from "controls.slint";
+import { Button, ButtonKind, Chip, Toggle, Card, Caption, SectionLabel, SquareImage, IconButton, ProgressBar } from "controls.slint";
 
 component SettingRow inherits Rectangle {
     in property <string> label;
     in property <string> value;
     in property <string> action;
     in property <string> action-label;
+    in property <string> action2;
+    in property <string> action2-label;
     in property <bool> enabled: true;
+    in property <bool> enabled2: true;
     in property <int> tour-step: -1;
     in property <length> scroll-offset;
     callback action-area-changed(TourTarget);
     callback clicked;
+    callback clicked2;
     min-height: 58px;
     vertical-stretch: 0;
     HorizontalLayout {
@@ -35,6 +39,10 @@ component SettingRow inherits Rectangle {
                 measure(area) => { root.action-area-changed(area); }
             }
             clicked => { root.clicked(); }
+        }
+        if root.action2 != "": Button {
+            text: root.action2; enabled: root.enabled2; accessible-label: root.action2-label;
+            clicked => { root.clicked2(); }
         }
     }
 }
@@ -64,6 +72,16 @@ export component SettingsPage inherits Rectangle {
     in-out property <bool> low-power;
     in property <bool> tray-available;
     in property <string> downloader-path;
+    in property <string> ffmpeg-path;
+    in property <string> ytdlp-info;
+    in property <string> ffmpeg-info;
+    in property <bool> ytdlp-found;
+    in property <bool> ffmpeg-found;
+    in property <bool> ytdlp-managed;
+    in property <bool> ffmpeg-managed;
+    in property <bool> tool-busy;
+    in property <float> tool-progress;
+    in property <string> tool-status;
     in property <string> download-folder;
     in property <string> data-folder;
     in property <bool> downloading;
@@ -75,6 +93,9 @@ export component SettingsPage inherits Rectangle {
     callback power-changed(bool);
     callback theme-changed(int);
     callback choose-downloader;
+    callback choose-ffmpeg;
+    callback install-tool(int);
+    callback cancel-tool;
     callback choose-download-folder;
     // The developer card has no dismiss, hide or edit path. Its text arrives
     // from Rust already decoded, so nothing here is a plain string in the
@@ -217,12 +238,39 @@ export component SettingsPage inherits Rectangle {
                     VerticalLayout {
                         padding: root.compact ? 12px : 20px;
                         SettingRow {
-                            label: "yt-dlp executable";
-                            value: root.downloader-path;
+                            label: "yt-dlp";
+                            value: root.ytdlp-info;
                             action: "Choose";
                             action-label: "Choose yt-dlp executable";
-                            enabled: !root.downloading;
+                            action2: root.ytdlp-managed ? "Update" : (root.ytdlp-found ? "" : "Download");
+                            action2-label: root.ytdlp-managed ? "Update the managed yt-dlp" : "Download yt-dlp from its official release";
+                            enabled: !root.downloading && !root.tool-busy;
+                            enabled2: !root.downloading && !root.tool-busy;
                             clicked => { root.choose-downloader(); }
+                            clicked2 => { root.install-tool(0); }
+                        }
+                        Rectangle { height: 1px; background: Theme.border; }
+                        SettingRow {
+                            label: "FFmpeg";
+                            value: root.ffmpeg-info;
+                            action: "Choose";
+                            action-label: "Choose ffmpeg executable";
+                            action2: root.ffmpeg-managed ? "Update" : (root.ffmpeg-found ? "" : "Download");
+                            action2-label: root.ffmpeg-managed ? "Update the managed FFmpeg" : "Download FFmpeg from an official build";
+                            enabled: !root.downloading && !root.tool-busy;
+                            enabled2: !root.downloading && !root.tool-busy;
+                            clicked => { root.choose-ffmpeg(); }
+                            clicked2 => { root.install-tool(1); }
+                        }
+                        if root.tool-busy || root.tool-status != "": VerticalLayout {
+                            spacing: 8px;
+                            if root.tool-busy: ProgressBar { progress: root.tool-progress / 100; }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                cross-axis-alignment: center;
+                                Caption { horizontal-stretch: 1; text: root.tool-status; }
+                                if root.tool-busy: Button { text: "Cancel"; clicked => { root.cancel-tool(); } }
+                            }
                         }
                         Rectangle { height: 1px; background: Theme.border; }
                         SettingRow {
@@ -239,7 +287,7 @@ export component SettingsPage inherits Rectangle {
                             clicked => { root.choose-download-folder(); }
                         }
                         Rectangle { height: 8px; }
-                        Caption { text: "YouTube extraction needs yt-dlp. MP3 conversion also needs FFmpeg on PATH."; }
+                        Caption { text: "YouTube extraction needs yt-dlp. MP3 conversion also needs FFmpeg. Missing helpers can be downloaded and verified here."; }
                     }
                 }
                 Card {

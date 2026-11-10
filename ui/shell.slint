@@ -57,6 +57,16 @@ export component AppShell inherits FocusScope {
     in-out property <bool> low-power: true;
     in-out property <bool> rail-collapsed: false;
     in property <string> downloader-path: "Not selected";
+    in property <string> ffmpeg-path;
+    in property <string> ytdlp-info: "Checking…";
+    in property <string> ffmpeg-info: "Checking…";
+    in property <bool> ytdlp-found;
+    in property <bool> ffmpeg-found;
+    in property <bool> ytdlp-managed;
+    in property <bool> ffmpeg-managed;
+    in property <bool> tool-busy;
+    in property <float> tool-progress;
+    in property <string> tool-status;
     in property <string> download-folder: "Not selected";
     in property <string> data-folder;
     in property <string> download-status: "Paste a YouTube or YouTube Music link.";
@@ -103,6 +113,9 @@ export component AppShell inherits FocusScope {
     callback power-changed(bool);
     callback theme-changed(int);
     callback choose-downloader;
+    callback choose-ffmpeg;
+    callback install-tool(int);
+    callback cancel-tool;
     callback choose-download-folder;
     callback start-download(string, bool);
     callback cancel-download;
@@ -509,6 +522,16 @@ export component AppShell inherits FocusScope {
                                 low-power <=> root.low-power;
                                 tray-available: root.tray-available;
                                 downloader-path: root.downloader-path;
+                                ffmpeg-path: root.ffmpeg-path;
+                                ytdlp-info: root.ytdlp-info;
+                                ffmpeg-info: root.ffmpeg-info;
+                                ytdlp-found: root.ytdlp-found;
+                                ffmpeg-found: root.ffmpeg-found;
+                                ytdlp-managed: root.ytdlp-managed;
+                                ffmpeg-managed: root.ffmpeg-managed;
+                                tool-busy: root.tool-busy;
+                                tool-progress: root.tool-progress;
+                                tool-status: root.tool-status;
                                 download-folder: root.download-folder;
                                 data-folder: root.data-folder;
                                 downloading: root.downloading;
@@ -520,6 +543,9 @@ export component AppShell inherits FocusScope {
                                 power-changed(value) => { root.power-changed(value); }
                                 theme-changed(value) => { root.theme-changed(value); }
                                 choose-downloader => { root.choose-downloader(); }
+                                choose-ffmpeg => { root.choose-ffmpeg(); }
+                                install-tool(index) => { root.install-tool(index); }
+                                cancel-tool => { root.cancel-tool(); }
                                 choose-download-folder => { root.choose-download-folder(); }
                                 dev-name: root.dev-name;
                                 dev-role: root.dev-role;

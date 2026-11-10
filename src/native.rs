@@ -18,6 +18,7 @@ mod platform {
     const TRAY_MESSAGE: u32 = WM_APP + 41;
     const WM_SETTINGCHANGE: u32 = 0x001A;
     const WM_THEMECHANGED: u32 = 0x031A;
+    const SIZE_MINIMIZED: usize = 1;
     struct Context {
         ui: slint::Weak<AppWindow>,
         tx: mpsc::Sender<Command>,
@@ -30,6 +31,20 @@ mod platform {
         _id: usize,
         data: usize,
     ) -> LRESULT {
+        // The software renderer keeps a partial-paint cache; after a minimize
+        // or maximize it can present a stale buffer until input forces a
+        // repaint, leaving only the backdrop visible. Ask for a full frame on
+        // every resize that is not the minimize itself — the same recovery the
+        // tray restore performs below.
+        if msg == WM_SIZE && wp.0 != SIZE_MINIMIZED {
+            let context = unsafe { &*(data as *const Context) };
+            if let Some(ui) = context.ui.upgrade() {
+                ui.window().with_winit_window(|w| {
+                    w.request_redraw();
+                });
+                ui.window().request_redraw();
+            }
+        }
         if matches!(msg, WM_SETTINGCHANGE | WM_THEMECHANGED) {
             let context = unsafe { &*(data as *const Context) };
             if let Some(ui) = context.ui.upgrade() {
@@ -75,10 +90,18 @@ mod platform {
             };
             match action {
                 1 => {
+                    // SW_RESTORE shows and un-minimizes in one transition; the
+                    // winit calls keep its own visibility flags in step (winit
+                    // can otherwise skip or undo the real transition), and the
+                    // WM_SIZE handler above repaints the stale buffer.
+                    unsafe {
+                        let _ = ShowWindow(hwnd, SW_RESTORE);
+                        let _ = SetForegroundWindow(hwnd);
+                    }
                     if let Some(ui) = context.ui.upgrade() {
                         ui.window().with_winit_window(|w| {
-                            w.set_visible(true);
                             w.set_minimized(false);
+                            w.set_visible(true);
                             w.focus_window();
                             w.request_redraw();
                         });

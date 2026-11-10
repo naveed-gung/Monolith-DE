@@ -22,6 +22,178 @@ slint::include_modules!();
 mod seal;
 include!(concat!(env!("OUT_DIR"), "/sealed_name.rs"));
 
+// Shared tool detection; std + dirs only, by design. See `src/tools.rs`.
+// The player uses every item; the installer only needs a subset.
+#[allow(dead_code)]
+#[path = "../../src/tools.rs"]
+mod tools;
+
+/// Error alias `toolsetup.rs` expects from the player's library module.
+mod library {
+    pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+}
+
+/// The download helpers `toolsetup.rs` imports from the player's updater.
+/// Behaviour is kept identical: bounded HTTPS through the system curl, real
+/// byte progress, and a streaming SHA-256.
+mod updates {
+    use crate::library::Result;
+    use std::{
+        fs,
+        io::{Read, Seek, SeekFrom},
+        path::Path,
+        process::{Command, Stdio},
+        sync::atomic::{AtomicBool, Ordering},
+        time::Duration,
+    };
+
+    pub(crate) fn curl(
+        address: &str,
+        destination: &Path,
+        limit: u64,
+        cancelled: &AtomicBool,
+        progress: &mut dyn FnMut(u64),
+        hint: &str,
+    ) -> Result<()> {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err("Download cancelled.".into());
+        }
+        let stderr = tempfile::tempfile()?;
+        let program = if cfg!(windows) { "curl.exe" } else { "curl" };
+        let mut command = Command::new(program);
+        command
+            .args([
+                "--disable",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--location",
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "--connect-timeout",
+                "10",
+                "--max-time",
+                "600",
+                "--max-redirs",
+                "5",
+                "--max-filesize",
+            ])
+            .arg(limit.to_string())
+            .arg("--output")
+            .arg(destination)
+            .arg(address)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(stderr.try_clone()?);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let mut child = command
+            .spawn()
+            .map_err(|e| format!("HTTPS download tool unavailable: {e}"))?;
+        let outcome = loop {
+            if cancelled.load(Ordering::Relaxed)
+                || fs::metadata(destination).is_ok_and(|m| m.len() > limit)
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Download cancelled or download limit reached.".into());
+            }
+            progress(fs::metadata(destination).map_or(0, |m| m.len()));
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(e.into());
+                }
+            }
+        };
+        if !outcome.success() {
+            let mut stderr = stderr;
+            stderr.seek(SeekFrom::Start(0))?;
+            let mut error = String::new();
+            stderr.take(2048).read_to_string(&mut error)?;
+            return Err(format!("Download failed. {hint}{}", error.trim()).into());
+        }
+        Ok(())
+    }
+
+    pub fn head_length(address: &str, cancelled: &AtomicBool) -> Result<Option<u64>> {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err("Download cancelled.".into());
+        }
+        let program = if cfg!(windows) { "curl.exe" } else { "curl" };
+        let mut command = Command::new(program);
+        command
+            .args([
+                "--disable",
+                "--fail",
+                "--silent",
+                "--head",
+                "--location",
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "--connect-timeout",
+                "10",
+                "--max-time",
+                "30",
+                "--max-redirs",
+                "5",
+            ])
+            .arg(address)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let output = command.output()?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let headers = String::from_utf8_lossy(&output.stdout);
+        let size = headers
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().starts_with("content-length:"))
+            .filter_map(|line| line.split(':').nth(1)?.trim().parse::<u64>().ok())
+            .last();
+        Ok(size)
+    }
+
+    pub(crate) fn sha256(path: &Path) -> Result<String> {
+        let mut file = fs::File::open(path)?;
+        let mut context = ring::digest::Context::new(&ring::digest::SHA256);
+        let mut buffer = [0; 64 * 1024];
+        loop {
+            let n = file.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            context.update(&buffer[..n]);
+        }
+        Ok(context
+            .finish()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect())
+    }
+}
+
+// Shared download/verify/install for yt-dlp and FFmpeg. See `src/toolsetup.rs`.
+#[path = "../../src/toolsetup.rs"]
+mod toolsetup;
+
 // Read from the manifest rather than written out by hand. It was a literal
 // once, and Add/Remove Programs went on reporting 0.2.0 after the app had
 // already shipped 0.3.0.
@@ -419,6 +591,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_desktop(desktop_dir().is_some_and(|d| d.join("Monolith.lnk").exists()));
     ui.set_launch(true);
 
+    // Probe for yt-dlp/FFmpeg in the background so a slow executable never
+    // stalls the wizard; missing helpers become opt-in toggles on the Options
+    // page. Downloads only run after the app itself is installed, and a failed
+    // helper download never fails the install.
+    {
+        let weak = ui.as_weak();
+        std::thread::spawn(move || {
+            let ytdlp = tools::detect(tools::Tool::YtDlp, "");
+            let ffmpeg = tools::detect(tools::Tool::Ffmpeg, "");
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                ui.set_missing_ytdlp(ytdlp.is_none());
+                ui.set_missing_ffmpeg(ffmpeg.is_none());
+                ui.set_want_ytdlp(ytdlp.is_none());
+                ui.set_want_ffmpeg(ffmpeg.is_none());
+            });
+        });
+    }
+
     let weak = ui.as_weak();
     ui.on_browse(move || {
         let weak=weak.clone();
@@ -443,19 +633,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.set_progress(0.);
         ui.set_status("Preparing setup…".into());
         ui.set_step(3);
+        let want = [
+            (tools::Tool::YtDlp, ui.get_missing_ytdlp() && ui.get_want_ytdlp()),
+            (tools::Tool::Ffmpeg, ui.get_missing_ffmpeg() && ui.get_want_ffmpeg()),
+        ];
         let weak = weak.clone();
         std::thread::spawn(move || {
-            let result = install_to(&path, start_menu, desktop, |progress, status| {
+            let report = |progress: f32, status: &str| {
                 let text = status.to_owned();
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     ui.set_progress(progress);
                     ui.set_status(text.into());
                 });
+            };
+            let result = install_to(&path, start_menu, desktop, |progress, status| {
+                report(progress, status)
             });
+            let mut tool_notes = Vec::new();
+            if result.is_ok() {
+                let cancelled = std::sync::atomic::AtomicBool::new(false);
+                for (tool, wanted) in want {
+                    if !wanted {
+                        continue;
+                    }
+                    let label = tool.label();
+                    let weak = weak.clone();
+                    let installed = toolsetup::install(tool, &cancelled, move |part, text| {
+                        let _ = weak.upgrade_in_event_loop(move |ui| {
+                            ui.set_progress(part / 100.);
+                            ui.set_status(text.into());
+                        });
+                    });
+                    if let Err(error) = installed {
+                        let note = format!("{label} could not be installed ({error}). The app can download it later from Settings.");
+                        log(&note);
+                        tool_notes.push(note);
+                    }
+                }
+            }
             let _ = weak.upgrade_in_event_loop(move |ui| match result {
                 Ok(()) => {
                     ui.set_step(4);
-                    ui.set_status("Ready to listen.".into());
+                    ui.set_status(if tool_notes.is_empty() {
+                        "Ready to listen.".into()
+                    } else {
+                        format!("Ready to listen. {}", tool_notes.join(" ")).into()
+                    });
                 }
                 Err(error) => {
                     ui.set_failed(true);

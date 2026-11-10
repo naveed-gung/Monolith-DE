@@ -53,6 +53,8 @@ pub enum Command {
     Repeat(i32),
     Download(String, bool),
     Downloaded(String, std::result::Result<PathBuf, String>),
+    /// Re-probe helper locations after a tool install or a stale setting.
+    RescanTools,
     Shutdown,
 }
 fn update(ui: &slint::Weak<AppWindow>, f: impl FnOnce(AppWindow) + Send + 'static) {
@@ -784,12 +786,35 @@ impl Worker {
                 self.db.remove_from_playlist(playlist, id)?;
                 self.refresh()?;
             }
+            Command::RescanTools => {
+                for tool in monolith_desktop::tools::Tool::ALL {
+                    let saved = self.db.setting(tool.setting_key(), "");
+                    let found = monolith_desktop::tools::detect(tool, &saved);
+                    if let Some(f) = &found {
+                        let path = f.path.to_string_lossy().into_owned();
+                        if path != saved {
+                            self.db.save(tool.setting_key(), &path)?;
+                        }
+                    }
+                    update(&self.ui, move |u| {
+                        crate::tool_ui::report(&u, tool, found.as_ref())
+                    });
+                }
+                let downloader = self.db.setting("downloader", "");
+                let ffmpeg = self.db.setting("ffmpeg", "");
+                update(&self.ui, move |u| {
+                    u.set_downloader_path(downloader.into());
+                    u.set_ffmpeg_path(ffmpeg.into());
+                });
+            }
             Command::Save(key, value) => {
                 self.db.save(&key, &value)?;
                 let downloader = self.db.setting("downloader", "");
+                let ffmpeg = self.db.setting("ffmpeg", "");
                 let folder = self.db.setting("download_folder", "");
                 update(&self.ui, move |u| {
                     u.set_downloader_path(downloader.into());
+                    u.set_ffmpeg_path(ffmpeg.into());
                     u.set_download_folder(folder.into());
                 });
             }
@@ -951,6 +976,7 @@ pub fn spawn(
                         cancel.store(false, Ordering::Relaxed);
                         let executable = PathBuf::from(state.db.setting("downloader", ""));
                         let destination = PathBuf::from(state.db.setting("download_folder", ""));
+                        let ffmpeg = PathBuf::from(state.db.setting("ffmpeg", ""));
                         let weak = state.ui.clone();
                         let sender = tx.clone();
                         let stop = cancel.clone();
@@ -965,6 +991,7 @@ pub fn spawn(
                                 &url,
                                 &destination,
                                 mp3,
+                                ffmpeg.is_file().then_some(ffmpeg.as_path()),
                                 stop,
                                 |percent, message| {
                                     update(&weak, move |u| {

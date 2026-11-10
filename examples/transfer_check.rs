@@ -37,6 +37,7 @@ fn main() -> Result<()> {
         "https://youtu.be/success",
         dir.path(),
         false,
+        None,
         cancel.clone(),
         |_, _| updates += 1,
     )?;
@@ -47,6 +48,7 @@ fn main() -> Result<()> {
         "https://youtu.be/success",
         dir.path(),
         false,
+        None,
         cancel.clone(),
         |_, _| {},
     );
@@ -57,6 +59,7 @@ fn main() -> Result<()> {
         "https://youtu.be/fail",
         dir.path(),
         false,
+        None,
         cancel.clone(),
         |_, _| {},
     );
@@ -76,6 +79,7 @@ fn main() -> Result<()> {
         "https://youtu.be/cancel",
         dir.path(),
         false,
+        None,
         cancel,
         |_, _| {},
     );

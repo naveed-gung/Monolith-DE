@@ -32,7 +32,7 @@ pub fn validated_url(text: &str) -> Result<String> {
     }
     Ok(url.to_string())
 }
-pub fn arguments(url: &str, directory: &Path, mp3: bool) -> Vec<String> {
+pub fn arguments(url: &str, directory: &Path, mp3: bool, ffmpeg: Option<&Path>) -> Vec<String> {
     let mut a = vec![
         "--ignore-config",
         "--no-plugin-dirs",
@@ -68,6 +68,12 @@ pub fn arguments(url: &str, directory: &Path, mp3: bool) -> Vec<String> {
     .map(str::to_owned)
     .collect::<Vec<_>>();
     a.push(directory.to_string_lossy().into_owned());
+    if let Some(ffmpeg) = ffmpeg {
+        // A managed or custom FFmpeg is not on PATH, so yt-dlp needs its
+        // exact location for extraction and probing.
+        a.push("--ffmpeg-location".to_owned());
+        a.push(ffmpeg.to_string_lossy().into_owned());
+    }
     a.extend(
         [
             "-o",
@@ -89,18 +95,9 @@ pub fn arguments(url: &str, directory: &Path, mp3: bool) -> Vec<String> {
     a.extend(["--".into(), url.into()]);
     a
 }
-pub fn quiet(command: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-}
+/// Keep helper console windows off the screen. Shared implementation lives
+/// with the other tool-location code.
+pub use crate::tools::quiet;
 fn stop(child: &mut std::process::Child) {
     if child.try_wait().ok().flatten().is_some() {
         return;
@@ -181,12 +178,15 @@ pub fn download(
     url: &str,
     destination: &Path,
     mp3: bool,
+    ffmpeg: Option<&Path>,
     cancel: Arc<AtomicBool>,
     mut progress: impl FnMut(f32, String),
 ) -> Result<PathBuf> {
     let url = validated_url(url)?;
     if !executable.is_file() {
-        return Err("Choose the installed yt-dlp executable in Settings.".into());
+        return Err(
+            "yt-dlp was not found. Install it or choose the executable in Settings.".into(),
+        );
     }
     if !destination.is_dir() {
         return Err("Choose an existing download folder in Settings.".into());
@@ -197,7 +197,7 @@ pub fn download(
         .tempdir_in(&destination)?;
     let mut command = Command::new(executable);
     command
-        .args(arguments(&url, staging.path(), mp3))
+        .args(arguments(&url, staging.path(), mp3, ffmpeg))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -372,7 +372,16 @@ mod tests {
         }
         let link = validated_url("https://youtu.be/abc")?;
         let root = tempfile::tempdir()?;
-        let args = arguments(&link, root.path(), false);
+        let args = arguments(&link, root.path(), false, None);
+        assert!(!args.contains(&"--ffmpeg-location".into()));
+        let args = arguments(
+            &link,
+            root.path(),
+            true,
+            Some(Path::new("C:/tools/ffmpeg.exe")),
+        );
+        let slot = args.iter().position(|a| a == "--ffmpeg-location").unwrap();
+        assert_eq!(args[slot + 1], "C:/tools/ffmpeg.exe");
         assert_eq!(args[args.len() - 2], "--");
         assert_eq!(args.last().unwrap(), &link);
         assert!(args.contains(&"--ignore-config".into()));

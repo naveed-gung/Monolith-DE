@@ -115,9 +115,20 @@ pub fn parse_release(
     }))
 }
 
-fn curl(address: &str, destination: &Path, limit: u64, cancelled: &AtomicBool) -> Result<()> {
+/// Streaming HTTPS download through the system curl, bounded by `limit`.
+/// `progress` receives the bytes on disk so callers can show real movement;
+/// `hint` explains failures in caller terms (private GitHub releases, helper
+/// names) without this function knowing what is being fetched.
+pub(crate) fn curl(
+    address: &str,
+    destination: &Path,
+    limit: u64,
+    cancelled: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
+    hint: &str,
+) -> Result<()> {
     if cancelled.load(Ordering::Relaxed) {
-        return Err("Update cancelled.".into());
+        return Err("Download cancelled.".into());
     }
     let stderr = tempfile::tempfile()?;
     let program = if cfg!(windows) { "curl.exe" } else { "curl" };
@@ -162,8 +173,9 @@ fn curl(address: &str, destination: &Path, limit: u64, cancelled: &AtomicBool) -
         {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("Update cancelled or download limit reached.".into());
+            return Err("Download cancelled or download limit reached.".into());
         }
+        progress(fs::metadata(destination).map_or(0, |m| m.len()));
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => std::thread::sleep(Duration::from_millis(100)),
@@ -179,15 +191,70 @@ fn curl(address: &str, destination: &Path, limit: u64, cancelled: &AtomicBool) -
         stderr.seek(SeekFrom::Start(0))?;
         let mut error = String::new();
         stderr.take(2048).read_to_string(&mut error)?;
-        return Err(format!("GitHub download failed. No public release may be available; private releases need authentication. {}", error.trim()).into());
+        return Err(format!("Download failed. {hint}{}", error.trim()).into());
     }
     Ok(())
+}
+
+/// The size a server promises for `address`, or `None` when it does not say.
+/// HEAD only: no body bytes are downloaded.
+pub fn head_length(address: &str, cancelled: &AtomicBool) -> Result<Option<u64>> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Download cancelled.".into());
+    }
+    let program = if cfg!(windows) { "curl.exe" } else { "curl" };
+    let mut command = Command::new(program);
+    command
+        .args([
+            "--disable",
+            "--fail",
+            "--silent",
+            "--head",
+            "--location",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "30",
+            "--max-redirs",
+            "5",
+        ])
+        .arg(address)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = command.output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let headers = String::from_utf8_lossy(&output.stdout);
+    let size = headers
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().starts_with("content-length:"))
+        .filter_map(|line| line.split(':').nth(1)?.trim().parse::<u64>().ok())
+        .last();
+    Ok(size)
 }
 
 pub fn check(cancelled: &AtomicBool) -> Result<Option<Release>> {
     let address = format!("https://api.github.com/repos/{REPOSITORY}/releases/latest");
     let metadata = tempfile::NamedTempFile::new()?;
-    curl(&address, metadata.path(), METADATA_LIMIT, cancelled)?;
+    curl(
+        &address,
+        metadata.path(),
+        METADATA_LIMIT,
+        cancelled,
+        &mut |_| {},
+        "No public release may be available; private releases need authentication. ",
+    )?;
     let platform = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("windows", "x86_64") => "windows-x86_64",
         ("linux", "x86_64") => "linux-amd64",
@@ -252,7 +319,14 @@ pub fn download(release: &Release, directory: &Path, cancelled: &AtomicBool) -> 
         .prefix(".monolith-update-")
         .suffix(suffix)
         .tempfile_in(directory)?;
-    curl(&release.url, staged.path(), release.size, cancelled)?;
+    curl(
+        &release.url,
+        staged.path(),
+        release.size,
+        cancelled,
+        &mut |_| {},
+        "No public release may be available; private releases need authentication. ",
+    )?;
     if cancelled.load(Ordering::Relaxed) {
         return Err("Update cancelled.".into());
     }
@@ -384,7 +458,9 @@ mod tests {
                 "https://example.invalid",
                 destination.path(),
                 10,
-                &AtomicBool::new(true)
+                &AtomicBool::new(true),
+                &mut |_| {},
+                ""
             )
             .is_err()
         );

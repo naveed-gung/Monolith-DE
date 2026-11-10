@@ -6,6 +6,7 @@ mod controller;
 mod crash_ui;
 mod native;
 mod nearby_ui;
+mod tool_ui;
 mod update_ui;
 use controller::Command;
 use monolith_desktop::{
@@ -93,6 +94,11 @@ fn run() -> Result<()> {
         std::time::Duration::from_secs(24 * 60 * 60),
     );
     let downloader = db.setting("downloader", "");
+    let ffmpeg = db.setting("ffmpeg", "");
+    let saved_tools: Vec<String> = monolith_desktop::tools::Tool::ALL
+        .iter()
+        .map(|tool| db.setting(tool.setting_key(), ""))
+        .collect();
     // Local portrait stays outside Git/packages and survives app updates.
     // Resolve disk I/O before creating the UI/event loop.
     let developer_photo = identity::avatar_from(&data).unwrap_or_default();
@@ -110,6 +116,7 @@ fn run() -> Result<()> {
     app.set_rail_collapsed(rail_collapsed);
     app.set_glass_available(cfg!(windows));
     app.set_downloader_path(downloader.into());
+    app.set_ffmpeg_path(ffmpeg.into());
     app.set_download_folder(downloads.into());
     app.set_data_folder(data.to_string_lossy().as_ref().into());
     app.set_theme_hint(show_theme_hint);
@@ -176,6 +183,31 @@ fn run() -> Result<()> {
     let cancel = Arc::new(AtomicBool::new(false));
     let worker = controller::spawn(db, app.as_weak(), rx, tx.clone(), cancel.clone());
     let sharing = nearby_ui::Sharing::bind(&app, data.clone(), tx.clone())?;
+    let _tool_installer = tool_ui::Tools::bind(&app, tx.clone());
+    {
+        // Probe helpers in the background: saved paths first, then the managed
+        // folder, PATH and the usual package-manager homes. A discovered path
+        // goes through Save so Settings and the library stay in agreement.
+        let weak = app.as_weak();
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            for (tool, saved) in monolith_desktop::tools::Tool::ALL
+                .into_iter()
+                .zip(saved_tools)
+            {
+                let found = monolith_desktop::tools::detect(tool, &saved);
+                if let Some(f) = &found {
+                    let path = f.path.to_string_lossy().into_owned();
+                    if path != saved {
+                        let _ = tx.send(Command::Save(tool.setting_key().into(), path));
+                    }
+                }
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    tool_ui::report(&ui, tool, found.as_ref());
+                });
+            }
+        });
+    }
     macro_rules! bind {
         ($method:ident,$variant:ident) => {{
             let sender = tx.clone();
@@ -444,6 +476,25 @@ fn run() -> Result<()> {
                         "downloader".into(),
                         path.to_string_lossy().into_owned(),
                     ));
+                    let _ = tx.send(Command::RescanTools);
+                }
+            });
+        });
+    }
+    {
+        let tx = tx.clone();
+        app.on_choose_ffmpeg(move || {
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("Choose ffmpeg executable")
+                    .pick_file()
+                {
+                    let _ = tx.send(Command::Save(
+                        "ffmpeg".into(),
+                        path.to_string_lossy().into_owned(),
+                    ));
+                    let _ = tx.send(Command::RescanTools);
                 }
             });
         });
@@ -486,7 +537,8 @@ fn run() -> Result<()> {
         let (slot, tx) = (integration.clone(), tx.clone());
         slint::spawn_local(async move {
             let Some(app) = weak.upgrade() else { return };
-            if app.window().winit_window().await.is_err() {
+            if let Err(e) = app.window().winit_window().await {
+                eprintln!("Native integration: winit window unavailable: {e}");
                 return;
             }
             app.set_glass(glass && backdrop(&app, true));
@@ -513,10 +565,13 @@ fn run() -> Result<()> {
                     let _ = native.sync(&app);
                     *slot.borrow_mut() = Some(native);
                 }
-                Err(e) => app.set_status(
-                    format!("Music is ready; Windows tray/media integration unavailable: {e}")
-                        .into(),
-                ),
+                Err(e) => {
+                    eprintln!("Native integration failed: {e}");
+                    app.set_status(
+                        format!("Music is ready; Windows tray/media integration unavailable: {e}")
+                            .into(),
+                    );
+                }
             }
         })?;
     }

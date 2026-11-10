@@ -2,6 +2,8 @@
 #![allow(dead_code)]
 #[path = "../src/controller.rs"]
 mod controller;
+#[path = "../src/tool_ui.rs"]
+mod tool_ui;
 use controller::Command;
 use monolith_desktop::library::{Library, Result};
 use slint::{ComponentHandle, Model};

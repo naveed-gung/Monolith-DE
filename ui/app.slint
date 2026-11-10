@@ -73,6 +73,16 @@ export component AppWindow inherits Window {
     in-out property <bool> low-power <=> shell.low-power;
     in-out property <bool> rail-collapsed <=> shell.rail-collapsed;
     in property <string> downloader-path <=> shell.downloader-path;
+    in property <string> ffmpeg-path <=> shell.ffmpeg-path;
+    in property <string> ytdlp-info <=> shell.ytdlp-info;
+    in property <string> ffmpeg-info <=> shell.ffmpeg-info;
+    in property <bool> ytdlp-found <=> shell.ytdlp-found;
+    in property <bool> ffmpeg-found <=> shell.ffmpeg-found;
+    in property <bool> ytdlp-managed <=> shell.ytdlp-managed;
+    in property <bool> ffmpeg-managed <=> shell.ffmpeg-managed;
+    in property <bool> tool-busy <=> shell.tool-busy;
+    in property <float> tool-progress <=> shell.tool-progress;
+    in property <string> tool-status <=> shell.tool-status;
     in property <string> download-folder <=> shell.download-folder;
     in property <string> data-folder <=> shell.data-folder;
     in property <string> download-status <=> shell.download-status;
@@ -122,6 +132,9 @@ export component AppWindow inherits Window {
     callback power-changed(bool);
     callback theme-changed(int);
     callback choose-downloader;
+    callback choose-ffmpeg;
+    callback install-tool(int);
+    callback cancel-tool;
     callback choose-download-folder;
     callback start-download(string, bool);
     callback cancel-download;
@@ -185,6 +198,9 @@ export component AppWindow inherits Window {
         power-changed(value) => { root.power-changed(value); }
         theme-changed(value) => { root.theme-changed(value); }
         choose-downloader => { root.choose-downloader(); }
+        choose-ffmpeg => { root.choose-ffmpeg(); }
+        install-tool(index) => { root.install-tool(index); }
+        cancel-tool => { root.cancel-tool(); }
         choose-download-folder => { root.choose-download-folder(); }
         start-download(url, mp3) => { root.start-download(url, mp3); }
         cancel-download => { root.cancel-download(); }

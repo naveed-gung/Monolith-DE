@@ -23,6 +23,10 @@ export component SetupWindow inherits Window {
     in-out property <bool> failed: false;
     in-out property <string> version;
     in-out property <string> heading;
+    in property <bool> missing-ytdlp;
+    in property <bool> missing-ffmpeg;
+    in-out property <bool> want-ytdlp;
+    in-out property <bool> want-ffmpeg;
     in property <bool> updating;
     callback browse;
     callback install;
@@ -116,6 +120,9 @@ export component SetupWindow inherits Window {
                             Toggle { text: "Desktop shortcut"; description: "Keep a launcher on your desktop."; checked <=> root.desktop; }
                             Rectangle { height: 1px; background: Theme.border; }
                             Toggle { text: "Open after setup"; description: "Launch Monolith when you select Finish."; checked <=> root.launch; }
+                            if root.missing-ytdlp || root.missing-ffmpeg: Rectangle { height: 1px; background: Theme.border; }
+                            if root.missing-ytdlp: Toggle { text: "Install yt-dlp"; description: "Needed for YouTube downloads. Downloaded and verified during setup; the app can do this later too."; checked <=> root.want-ytdlp; }
+                            if root.missing-ffmpeg: Toggle { text: "Install FFmpeg"; description: "Needed for MP3 conversion. Downloaded and verified during setup; the app can do this later too."; checked <=> root.want-ffmpeg; }
                         }
                     }
                 }

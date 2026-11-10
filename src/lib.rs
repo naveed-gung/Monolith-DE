@@ -7,6 +7,8 @@ pub mod lan;
 pub mod library;
 pub mod nearby;
 pub mod seal;
+pub mod tools;
+pub mod toolsetup;
 pub mod transfer;
 pub mod updates;
 pub mod version;
