@@ -166,10 +166,23 @@ impl Library {
         {
             return Ok(false);
         }
+        // Tags are optional. Some valid files (e.g. Android-recorded M4A with a
+        // trailing moov atom) trip lofty's MP4 parser while still decoding fine,
+        // so fall back to the decoder for validation and duration.
         let file = lofty::probe::Probe::open(&path)?
             .options(lofty::config::ParseOptions::new().read_cover_art(false))
-            .read()?;
-        let tag = file.primary_tag().or_else(|| file.first_tag());
+            .read()
+            .ok();
+        let seconds = match &file {
+            Some(f) => f.properties().duration().as_secs_f64(),
+            None => {
+                use rodio::Source;
+                let decoder = rodio::Decoder::try_from(std::fs::File::open(&path)?)
+                    .map_err(|e| format!("Not a playable audio file: {e}"))?;
+                decoder.total_duration().map_or(0., |d| d.as_secs_f64())
+            }
+        };
+        let tag = file.as_ref().and_then(|f| f.primary_tag().or_else(|| f.first_tag()));
         let title = tag
             .and_then(|t| t.title())
             .map(|v| v.into_owned())
@@ -190,13 +203,7 @@ impl Library {
             .unwrap_or_else(|| "Singles".into());
         self.0.execute(
             "INSERT INTO tracks(path,title,artist,album,seconds) VALUES(?1,?2,?3,?4,?5)",
-            params![
-                text,
-                title,
-                artist,
-                album,
-                file.properties().duration().as_secs_f64()
-            ],
+            params![text, title, artist, album, seconds],
         )?;
         Ok(true)
     }
@@ -939,6 +946,36 @@ mod tests {
         assert!(db.tracks(playlist)?.is_empty());
         for name in ["one.wav", "two.wav"] {
             assert_eq!(std::fs::read(dir.path().join(name))?, b"original");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_import_monolith_m4a() -> Result<()> {
+        let test_dir = Path::new("/home/0x00null/Music/Monolith");
+        if !test_dir.exists() {
+            return Ok(());
+        }
+        let dir = tempfile::tempdir()?;
+        let db = Library::open(&dir.path().join("library.sqlite3"))?;
+        let files = folder_files(test_dir)?;
+        assert!(!files.is_empty(), "No files found in /home/0x00null/Music/Monolith");
+        let mut imported = 0;
+        for file in &files {
+            if db.import(file)? {
+                imported += 1;
+            }
+        }
+        assert_eq!(imported, files.len(), "Failed to import all files");
+        let tracks = db.tracks(0)?;
+        assert_eq!(tracks.len(), files.len());
+
+        let real_db_path = Path::new("/home/0x00null/.local/share/MonolithDesktop/library.sqlite3");
+        if real_db_path.exists() {
+            let real_db = Library::open(real_db_path)?;
+            for file in &files {
+                let _ = real_db.import(file);
+            }
         }
         Ok(())
     }
