@@ -23,6 +23,11 @@ install -Dm755 "$binary" "$stage/usr/bin/monolith-desktop"
 install -Dm644 "$root/packaging/linux/monolith-desktop.desktop" "$stage/usr/share/applications/monolith-desktop.desktop"
 install -Dm644 "$root/packaging/linux/monolith.desktop.metainfo.xml" "$stage/usr/share/metainfo/monolith.desktop.metainfo.xml"
 install -Dm644 "$root/assets/monolith.svg" "$stage/usr/share/icons/hicolor/scalable/apps/monolith-desktop.svg"
+install -Dm644 "$root/assets/monolith.png" "$stage/usr/share/pixmaps/monolith-desktop.png"
+for s in 16 24 32 48 64 128 256 512; do
+    mkdir -p "$stage/usr/share/icons/hicolor/${s}x${s}/apps"
+    convert "$root/assets/monolith.png" -resize "${s}x${s}" "$stage/usr/share/icons/hicolor/${s}x${s}/apps/monolith-desktop.png"
+done
 install -Dm644 "$root/LICENSE" "$stage/usr/share/doc/monolith-desktop/copyright"
 mkdir -p "$stage/DEBIAN" "$work/debian" "$out"
 cat > "$work/debian/control" <<EOF
