@@ -166,10 +166,23 @@ impl Library {
         {
             return Ok(false);
         }
+        // Tags are optional. Some valid files (e.g. Android-recorded M4A with a
+        // trailing moov atom) trip lofty's MP4 parser while still decoding fine,
+        // so fall back to the decoder for validation and duration.
         let file = lofty::probe::Probe::open(&path)?
             .options(lofty::config::ParseOptions::new().read_cover_art(false))
-            .read()?;
-        let tag = file.primary_tag().or_else(|| file.first_tag());
+            .read()
+            .ok();
+        let seconds = match &file {
+            Some(f) => f.properties().duration().as_secs_f64(),
+            None => {
+                use rodio::Source;
+                let decoder = rodio::Decoder::try_from(std::fs::File::open(&path)?)
+                    .map_err(|e| format!("Not a playable audio file: {e}"))?;
+                decoder.total_duration().map_or(0., |d| d.as_secs_f64())
+            }
+        };
+        let tag = file.as_ref().and_then(|f| f.primary_tag().or_else(|| f.first_tag()));
         let title = tag
             .and_then(|t| t.title())
             .map(|v| v.into_owned())
@@ -190,13 +203,7 @@ impl Library {
             .unwrap_or_else(|| "Singles".into());
         self.0.execute(
             "INSERT INTO tracks(path,title,artist,album,seconds) VALUES(?1,?2,?3,?4,?5)",
-            params![
-                text,
-                title,
-                artist,
-                album,
-                file.properties().duration().as_secs_f64()
-            ],
+            params![text, title, artist, album, seconds],
         )?;
         Ok(true)
     }

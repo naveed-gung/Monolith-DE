@@ -80,7 +80,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y build-essential pkg-config dpkg-dev \
             libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev \
-            libxi-dev libxcursor-dev libgl1-mesa-dev libfontconfig1-dev
+            libxi-dev libxcursor-dev libgl1-mesa-dev libfontconfig1-dev imagemagick
 
       - name: Check release version
         shell: bash
