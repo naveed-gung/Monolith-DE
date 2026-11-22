@@ -400,7 +400,10 @@ fn discover_at(
                 sent_any |= socket.send_to(&query, target).is_ok();
             }
             if !sent_any {
-                return Err("Cannot reach the local network. Check that Wi-Fi or Ethernet is connected.".into());
+                return Err(
+                    "Cannot reach the local network. Check that Wi-Fi or Ethernet is connected."
+                        .into(),
+                );
             }
         }
         if let Some(listener) = own {

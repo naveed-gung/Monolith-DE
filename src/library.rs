@@ -182,7 +182,9 @@ impl Library {
                 decoder.total_duration().map_or(0., |d| d.as_secs_f64())
             }
         };
-        let tag = file.as_ref().and_then(|f| f.primary_tag().or_else(|| f.first_tag()));
+        let tag = file
+            .as_ref()
+            .and_then(|f| f.primary_tag().or_else(|| f.first_tag()));
         let title = tag
             .and_then(|t| t.title())
             .map(|v| v.into_owned())

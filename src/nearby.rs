@@ -570,7 +570,15 @@ mod tests {
             let parsed = Offer::parse(value_with_bad_art).unwrap();
             assert!(parsed.artwork.is_none(), "{key} should drop artwork only");
         }
-        assert!(Offer { artwork: None, ..offer }.value().get("artwork_size").is_none());
+        assert!(
+            Offer {
+                artwork: None,
+                ..offer
+            }
+            .value()
+            .get("artwork_size")
+            .is_none()
+        );
     }
     #[test]
     fn cover_art_travels_after_audio_and_lands_as_sidecar() {
@@ -587,7 +595,9 @@ mod tests {
         stale.artwork.as_mut().unwrap().sha256 = "b".repeat(64);
         let mut sink = Cursor::new(Vec::new());
         let quiet = AtomicBool::new(false);
-        assert!(send_with_artwork(&mut sink, &source, &stale, Some(&cover), &quiet, |_, _| {}).is_err());
+        assert!(
+            send_with_artwork(&mut sink, &source, &stale, Some(&cover), &quiet, |_, _| {}).is_err()
+        );
         assert!(sink.get_ref().is_empty());
 
         let dest = dir.path().join("inbox");

@@ -214,9 +214,7 @@ impl Sharing {
                             false,
                             false,
                         ),
-                        Some(Server::App(_)) => {
-                            update(&weak, |u| u.set_receiving_name("".into()))
-                        }
+                        Some(Server::App(_)) => update(&weak, |u| u.set_receiving_name("".into())),
                         None => {}
                     }
                 }
@@ -335,8 +333,12 @@ impl Sharing {
                                 u.set_progress(0.);
                             });
                             let hint = match (method, peers.is_empty()) {
-                                (1, true) => "Looking for Monolith on this Wi-Fi… Open Share on the other device; it appears here automatically.",
-                                (1, false) => "Choose a device and send. The recipient approves each song.",
+                                (1, true) => {
+                                    "Looking for Monolith on this Wi-Fi… Open Share on the other device; it appears here automatically."
+                                }
+                                (1, false) => {
+                                    "Choose a device and send. The recipient approves each song."
+                                }
                                 _ => "Choose a paired device running Monolith, or Receive a song.",
                             };
                             Ok(match notice {
