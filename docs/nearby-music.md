@@ -14,26 +14,38 @@ Share accepts up to **100 selected songs**, each at most **100,000,000 bytes**.
 One song per connection retains the existing v1 wire contract. Every file is
 preflighted before the first send. Each recipient approves each offer; completed
 receipts are counted and errors report partial completion honestly. No resume.
-Receive is an explicit five-minute foreground session supporting repeated
-approved offers; Close/Cancel stops it and aborts active sockets. Hashing,
-discovery, transfer and imports run off the UI thread.
-Nothing advertises or opens sharing sockets at app startup. Discovery runs only
-after opening Share and choosing Monolith app; a listener starts only on Receive.
-Close/Cancel stops discovery and drops the receiving sockets. There is no
-background sharing service, autostart listener or unattended acceptance.
+On **Monolith app (Wi-Fi)** the Share window itself is the receiving session:
+while it is open on that method this device is visible as its session alias
+and can both send and receive, like the mobile Share hub. There is no separate
+Receive step. Bluetooth keeps the explicit five-minute Receive session. Every
+incoming song still needs the recipient's approval. Hashing, discovery,
+transfer and imports run off the UI thread.
+Nothing advertises or opens sharing sockets at app startup. Sockets exist only
+while the Share window is open on Monolith app (or during Bluetooth Receive).
+Closing the window stops discovery and drops the listener. Cancel aborts the
+active transfer; Wi-Fi visibility resumes on the next scan while the window
+stays open. There is no background sharing service, autostart listener or
+unattended acceptance.
 
 ## Monolith app over Wi-Fi / Ethernet
 
 This transport is implemented in portable Rust, but only Windows execution and
 loopback interoperability have been tested. Mobile needs the matching update.
-Use the same IPv4 local network. Recipient chooses **Monolith app → Receive**.
-Sender chooses **Monolith app**, selects the recipient's friendly session name
-and sends. Nearby devices refresh automatically while the picker is open;
-Refresh also rescans on demand. The recipient approves each song before saving.
+Use the same IPv4 local network. Both people open **Share → Monolith app**; the
+window shows "Visible as <alias>". The sender selects the recipient's session
+name and sends. Nearby devices refresh automatically while the picker is open
+and stay listed for 15 seconds after their last answer, so one lost datagram
+does not make them flicker; Refresh also rescans on demand. The recipient approves each song before saving.
 There is no copy/paste verification code. Songs' third guide step highlights
 Share and Select and explains both transports and sharing a selection.
 
-Discovery is opt-in UDP broadcast to port **45881**, TTL 1. It announces no
+Discovery is opt-in UDP to port **45881**, TTL 1. Each scan sends three bursts
+(0, 0.6 and 1.2 s) to the limited broadcast address, the primary interface's
+/24 directed broadcast and a unicast sweep of that /24, because many access
+points and multi-adapter Windows hosts drop limited broadcast. The primary
+interface is found with a UDP `connect` route lookup (no packet is sent); only
+private IPv4 networks are swept. While scanning, the device keeps answering
+other scanners and filters its own fingerprint out of the results. It announces no
 hostname, account, song names or library; only a generated session alias and
 public certificate fingerprint accompany the listening port. The query JSON is
 `{"app":"monolith-music","version":1,"type":"discover","nonce":"<32 hex>"}`.
@@ -48,7 +60,8 @@ wrong nonces and other app IDs are rejected. Scans repeat after five seconds
 without disabling controls or resetting song choices. Device selection uses a
 stable address/certificate ID; reordering or disappearance cannot reroute Send.
 
-The recipient listens on an ephemeral TCP port only while Receive is active.
+The recipient listens on an ephemeral TCP port only while the Share window is
+open on Monolith app.
 Each receiving session generates an ephemeral P-256 key/self-signed X.509 cert.
 The **64-hex-character fingerprint** is SHA-256 of the DER cert, supplied by
 discovery and used internally. TLS **1.3 only**, Rustls with ring, matches that
@@ -120,8 +133,21 @@ three supplied fields; unsupported versions/apps/extra hello fields are rejected
    payload has **no per-chunk header**. Desktop uses buffers up to 65,536 bytes.
 5. Receiver checks SHA-256 and audio content, publishes without overwriting and
    imports into the existing library. Only then sends `saved` with the same hash.
+   If cover art was accepted (below), it is read and saved before the import.
 6. Sender validates the receipt. EOF/timeout/errors/cancel never mean success.
    Cancel closes the connection; there is no resumable-session/token API in v1.
+
+### Optional cover art (backward compatible)
+
+The offer may add `artwork_size` (1–8,388,608), lowercase `artwork_sha256` and
+`artwork_ext` (`jpg`, `png` or `webp`). A receiver that understands it answers
+`{"type":"accept","artwork":true}`; only then does the sender append exactly
+`artwork_size` bytes right after the audio. Older peers ignore the extra offer
+fields and never opt in, so v1 interoperability is unchanged. The receiver
+checks the SHA-256 and the image magic bytes, then writes `<song>.<ext>` beside
+the published song with create-new semantics (an existing sidecar is never
+replaced) before import. Bad or missing art never fails the song. The sender
+uses the song's sidecar image first, otherwise its first embedded picture.
 
 One song per connection; maximum 100,000,000 bytes, minimum one byte. Each socket
 wait has a 75-second idle timeout (connect: 15 seconds); a connection expires
@@ -160,8 +186,9 @@ performed. Verified published audio is retained if library import fails; no
 success receipt is sent. A lost receipt may leave a successfully imported song,
 so retry can report a filename collision rather than silently duplicate it.
 
-Embedded metadata/artwork survive byte-for-byte. Separate sidecar images are not
-sent in v1. All disk I/O, hashing, sockets and import run off the UI thread.
+Embedded metadata/artwork survive byte-for-byte. Sidecar or embedded cover art
+also travels through the optional artwork extension, so songs whose cover lives
+only in a sidecar keep it. All disk I/O, hashing, sockets and import run off the UI thread.
 Progress uses actual streamed byte counts; 100% bytes still awaits verification
 and library receipt. No downloader/FFmpeg execution is involved.
 

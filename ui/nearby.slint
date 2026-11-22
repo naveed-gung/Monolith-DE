@@ -90,7 +90,15 @@ export component NearbyWindow inherits Window {
                         Caption { text: "Paired devices with compatible Monolith sharing support."; }
                     }
                 }
-                if root.method > 0 && !root.listening && !root.incoming: Caption { text: root.method == 1 ? "Choose Receive on the other Monolith device. Nearby Monolith devices appear here; choose one and send. The recipient approves each song." : "Pair devices in system Bluetooth settings first. Open Share music on both devices, then choose Receive on the recipient."; }
+                if root.method == 1 && root.receiving-name != "" && !root.incoming: Card {
+                    VerticalLayout {
+                        padding: 14px; spacing: 6px;
+                        SectionLabel { text: "VISIBLE AS"; }
+                        Text { text: root.receiving-name; color: Theme.foreground; font-size: Theme.type-heading; font-weight: 600; wrap: word-wrap; }
+                        Caption { text: "Others on this Wi-Fi can send you songs while this window is open. You approve each one; its cover art comes along."; }
+                    }
+                }
+                if root.method > 0 && !root.listening && !root.incoming: Caption { text: root.method == 1 ? "Open Share on the other Monolith device (phone or computer). It appears below automatically; pick a song and a device, then send." : "Pair devices in system Bluetooth settings first. Open Share music on both devices, then choose Receive on the recipient."; }
                 if root.method > 0 && !root.incoming && !root.listening: VerticalLayout {
                     spacing: 8px;
                     SectionLabel { text: root.batch ? "1 · SELECTED SONGS" : "1 · CHOOSE A SONG"; }
@@ -116,17 +124,9 @@ export component NearbyWindow inherits Window {
                                 clicked => { root.device-index = index; }
                             }
                         }
-                        if root.devices.length == 0: Text { x: 12px; width: parent.width - 24px; text: root.method == 1 ? "No receiving Monolith apps found." : "No paired devices available."; color: Theme.muted; vertical-alignment: center; }
+                        if root.devices.length == 0: Text { x: 12px; width: parent.width - 24px; text: root.method == 1 ? "Searching this Wi-Fi… Open Share on the other device." : "No paired devices available."; color: Theme.muted; vertical-alignment: center; wrap: word-wrap; }
                     }
-                    Caption { text: "Mobile devices need the matching Monolith sharing update. Bluetooth on iPhone and Linux is pending."; }
-                }
-                if root.method == 1 && root.listening: Card {
-                    VerticalLayout {
-                        padding: 14px; spacing: 8px;
-                        SectionLabel { text: "READY TO RECEIVE"; }
-                        Text { text: root.receiving-name; color: Theme.foreground; font-size: Theme.type-heading; font-weight: 600; wrap: word-wrap; }
-                        Caption { text: "Choose this device on the sender. You’ll be asked before each song is saved."; }
-                    }
+                    Caption { text: root.method == 1 ? "Not showing up? Both devices must be on the same Wi-Fi (not a guest network) and need the latest Monolith." : "Bluetooth sharing on iPhone and Linux is pending."; }
                 }
                 if root.incoming: Card {
                     VerticalLayout {
@@ -156,7 +156,7 @@ export component NearbyWindow inherits Window {
                 enabled: root.available && root.song-index >= 0 && root.device-index >= 0;
                 clicked => { root.send-song(root.song-index, root.device-index); }
             }
-            if root.method > 0 && !root.busy && !root.listening: Button { text: "Receive"; enabled: root.available; clicked => { root.receive-song(); } }
+            if root.method == 2 && !root.busy && !root.listening: Button { text: "Receive"; enabled: root.available; clicked => { root.receive-song(); } }
             if root.busy || root.listening: Button { text: "Cancel"; clicked => { root.cancel(); } }
         }
     }

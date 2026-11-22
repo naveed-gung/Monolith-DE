@@ -23,7 +23,9 @@ export component AppWindow inherits Window {
     // (that leaves only 384 logical pixels of height), so the floor is lower.
     min-width: 420px;
     min-height: 380px;
-    background: transparent;
+    // Only the Windows acrylic backdrop needs a see-through window. Elsewhere an
+    // opaque canvas stops uncovered gaps showing stale or white compositor pixels.
+    background: root.glass ? transparent : Theme.canvas;
     default-font-family: "Segoe UI Variable";
     default-font-size: 14px;
     private property <length> viewport-width;

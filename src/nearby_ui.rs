@@ -7,6 +7,7 @@ use monolith_desktop::{
 };
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{
         Arc,
@@ -58,9 +59,49 @@ fn show_peers(ui: &slint::Weak<NearbyWindow>, peers: &[Peer]) {
         u.set_device_index(selected);
     });
 }
+/// A device that stops answering is dropped after this long, so one lost
+/// discovery round does not make it flicker out of the picker.
+const PEER_TTL: Duration = Duration::from_secs(15);
 enum Server {
     Bluetooth(bluetooth::Listener),
     App(lan::Listener),
+}
+/// Our LAN listener, so scans keep answering others and skip ourselves.
+fn own_lan(listener: &Option<Server>) -> Option<&lan::Listener> {
+    match listener {
+        Some(Server::App(server)) => Some(server),
+        _ => None,
+    }
+}
+/// Explicit Bluetooth Receive mode. LAN visibility is implicit and keeps the
+/// song and device pickers usable.
+fn receiving(listener: &Option<Server>) -> bool {
+    matches!(listener, Some(Server::Bluetooth(_)))
+}
+/// Wi-Fi mode is visible whenever this window is open on it, like the mobile
+/// Share hub: no separate Receive step. Returns a notice if binding failed.
+fn arm_lan(
+    listener: &mut Option<Server>,
+    cancel: &Arc<AtomicBool>,
+    ui: &slint::Weak<NearbyWindow>,
+) -> Option<String> {
+    if matches!(listener, Some(Server::App(_))) {
+        return None;
+    }
+    match lan::Listener::bind(cancel.clone()) {
+        Ok(server) => {
+            let name = server.name.clone();
+            update(ui, move |u| u.set_receiving_name(name.into()));
+            *listener = Some(Server::App(server));
+            None
+        }
+        Err(e) => {
+            update(ui, |u| u.set_receiving_name("".into()));
+            Some(format!(
+                "Other devices can't find this one right now ({e}). You can still send."
+            ))
+        }
+    }
 }
 impl Server {
     fn accept(&self) -> Result<Option<(Box<dyn Transport>, String)>> {
@@ -155,21 +196,28 @@ impl Sharing {
             let mut batch = false;
             let mut songs: Vec<Track> = Vec::new();
             let mut peers: Vec<Peer> = Vec::new();
+            let mut last_seen: HashMap<String, Instant> = HashMap::new();
             let mut destination = PathBuf::new();
-            let mut listening_until = Instant::now();
+            // Only explicit Bluetooth receiving expires; Wi-Fi lasts while the window is open.
+            let mut listening_until: Option<Instant> = None;
             let mut next_discovery = Instant::now();
             loop {
                 if worker_cancel.load(Ordering::Relaxed)
                     || worker_closed.load(Ordering::Relaxed)
-                    || Instant::now() > listening_until
+                    || listening_until.is_some_and(|t| Instant::now() > t)
                 {
-                    if listener.take().is_some() {
-                        state(
+                    listening_until = None;
+                    match listener.take() {
+                        Some(Server::Bluetooth(_)) => state(
                             &weak,
                             "Receiving stopped. Choose Receive to start another session.".into(),
                             false,
                             false,
-                        );
+                        ),
+                        Some(Server::App(_)) => {
+                            update(&weak, |u| u.set_receiving_name("".into()))
+                        }
+                        None => {}
                     }
                 }
                 let action = if listener.is_some()
@@ -192,7 +240,14 @@ impl Sharing {
                     }
                     if matches!(action, Action::Stop) {
                         listener = None;
-                        state(&weak, "Sharing stopped.".into(), false, false);
+                        listening_until = None;
+                        if !worker_closed.load(Ordering::Relaxed) {
+                            // The cancelled work has finished (single worker), so let
+                            // Wi-Fi mode become visible again on the next idle tick.
+                            worker_cancel.store(false, Ordering::Relaxed);
+                            next_discovery = Instant::now();
+                        }
+                        state(&weak, "Sharing cancelled.".into(), false, false);
                         continue;
                     }
                     if worker_closed.load(Ordering::Relaxed) {
@@ -202,9 +257,14 @@ impl Sharing {
                     worker_cancel.store(false, Ordering::Relaxed);
                     let result: Result<String> = (|| match action {
                         Action::Refresh(current, folder, selected, transport) => {
-                            listener = None;
+                            // Keep an existing Wi-Fi listener so our address stays stable.
+                            if !(transport == 1 && matches!(listener, Some(Server::App(_)))) {
+                                listener = None;
+                                listening_until = None;
+                            }
                             session = None;
                             peers.clear();
+                            last_seen.clear();
                             method = transport;
                             batch = selected.len() > 1;
                             destination = folder;
@@ -234,7 +294,6 @@ impl Sharing {
                                 .unwrap_or(-1);
                             update(&weak, move |u| {
                                 u.set_batch(batch_value);
-                                u.set_receiving_name("".into());
                                 u.set_songs(ModelRc::new(VecModel::from(labels)));
                                 u.set_song_index(selected);
                                 u.set_devices(ModelRc::default());
@@ -242,14 +301,23 @@ impl Sharing {
                                 u.set_device_index(-1);
                                 u.set_available(false);
                             });
+                            if method != 1 {
+                                update(&weak, |u| u.set_receiving_name("".into()));
+                            }
                             if method == 0 {
                                 return Ok("Choose Monolith app or Bluetooth to continue.".into());
                             }
+                            let mut notice = None;
                             if method == 1 {
-                                peers = lan::discover(&worker_cancel)?
+                                notice = arm_lan(&mut listener, &worker_cancel, &weak);
+                                peers = lan::discover(&worker_cancel, own_lan(&listener))?
                                     .into_iter()
                                     .map(Peer::App)
                                     .collect();
+                                let now = Instant::now();
+                                for peer in &peers {
+                                    last_seen.insert(peer.id(), now);
+                                }
                             } else {
                                 session = Some(bluetooth::Session::new()?);
                                 peers = session
@@ -266,23 +334,28 @@ impl Sharing {
                                 u.set_available(true);
                                 u.set_progress(0.);
                             });
-                            Ok(if method == 1 { "Open Receive on the other Monolith device, then choose it here. The recipient approves each song." } else { "Choose a paired device running Monolith, or Receive a song." }.into())
+                            let hint = match (method, peers.is_empty()) {
+                                (1, true) => "Looking for Monolith on this Wi-Fi… Open Share on the other device; it appears here automatically.",
+                                (1, false) => "Choose a device and send. The recipient approves each song.",
+                                _ => "Choose a paired device running Monolith, or Receive a song.",
+                            };
+                            Ok(match notice {
+                                Some(notice) => format!("{notice} {hint}"),
+                                None => hint.into(),
+                            })
                         }
                         Action::Receive => {
-                            listener = Some(if method == 1 {
-                                let server = lan::Listener::bind(worker_cancel.clone())?;
-                                let name = server.name.clone();
-                                update(&weak, move |u| u.set_receiving_name(name.into()));
-                                Server::App(server)
-                            } else {
-                                Server::Bluetooth(
-                                    session
-                                        .as_ref()
-                                        .ok_or("Refresh devices first.")?
-                                        .listen(worker_cancel.clone())?,
-                                )
-                            });
-                            listening_until = Instant::now() + Duration::from_secs(300);
+                            if method == 1 {
+                                return Ok(arm_lan(&mut listener, &worker_cancel, &weak)
+                                    .unwrap_or_else(|| "Visible to nearby Monolith devices while this window is open. Each song asks for your approval.".into()));
+                            }
+                            listener = Some(Server::Bluetooth(
+                                session
+                                    .as_ref()
+                                    .ok_or("Refresh devices first.")?
+                                    .listen(worker_cancel.clone())?,
+                            ));
+                            listening_until = Some(Instant::now() + Duration::from_secs(300));
                             Ok("Receiving for 5 minutes. Each song needs your approval; Close or Cancel stops receiving.".into())
                         }
                         Action::Send(song_index, peer_id) => {
@@ -310,6 +383,11 @@ impl Sharing {
                             let total = selected.len();
                             let mut saved = 0;
                             for (song, offer) in selected.into_iter().zip(offers) {
+                                // Read cover art per song (not in preflight) to cap memory
+                                // at one cover. Missing art never blocks the song.
+                                let path = std::path::Path::new(&song.path);
+                                let art = nearby::artwork_for(path);
+                                let offer = offer.with_artwork(art.as_deref());
                                 let outcome: Result<()> = (|| {
                                     let mut stream: Box<dyn Transport> = match peer {
                                         Peer::Bluetooth(p) => Box::new(
@@ -330,10 +408,11 @@ impl Sharing {
                                         u.set_progress(0.);
                                         u.set_status(note.into());
                                     });
-                                    nearby::send(
+                                    nearby::send_with_artwork(
                                         &mut stream,
-                                        std::path::Path::new(&song.path),
+                                        path,
                                         &offer,
+                                        art.as_deref(),
                                         &worker_cancel,
                                         progress(weak.clone()),
                                     )
@@ -356,19 +435,30 @@ impl Sharing {
                         &weak,
                         result.unwrap_or_else(|e| e.to_string()),
                         false,
-                        listener.is_some(),
+                        receiving(&listener),
                     );
                 }
                 // Keep the picker current without disabling buttons or changing song choices.
                 // Stable endpoint IDs prevent a disappearing/reordered device from rerouting Send.
                 else if method == 1
-                    && listener.is_none()
                     && !worker_cancel.load(Ordering::Relaxed)
                     && !worker_closed.load(Ordering::Relaxed)
                     && Instant::now() >= next_discovery
                 {
-                    if let Ok(found) = lan::discover(&worker_cancel) {
-                        peers = found.into_iter().map(Peer::App).collect();
+                    // Re-arm after a cancel or failed bind; throttled to the scan interval.
+                    let _ = arm_lan(&mut listener, &worker_cancel, &weak);
+                    if let Ok(found) = lan::discover(&worker_cancel, own_lan(&listener)) {
+                        let now = Instant::now();
+                        for peer in found.into_iter().map(Peer::App) {
+                            let id = peer.id();
+                            last_seen.insert(id.clone(), now);
+                            match peers.iter().position(|p| p.id() == id) {
+                                Some(i) => peers[i] = peer,
+                                None => peers.push(peer),
+                            }
+                        }
+                        last_seen.retain(|_, seen| now.duration_since(*seen) < PEER_TTL);
+                        peers.retain(|p| last_seen.contains_key(&p.id()));
                         show_peers(&weak, &peers);
                     }
                     next_discovery = Instant::now() + Duration::from_secs(5);
@@ -445,7 +535,7 @@ impl Sharing {
                                     })
                                     .unwrap_or_else(|e| e.to_string()),
                                 false,
-                                listener.is_some(),
+                                receiving(&listener),
                             );
                         }
                     }

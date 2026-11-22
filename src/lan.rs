@@ -256,10 +256,13 @@ impl Listener {
             cancel,
         })
     }
-    pub fn accept(&self) -> Result<Option<Receiver>> {
-        if self.cancel.load(Ordering::Relaxed) {
-            return Ok(None);
-        }
+    /// This session's certificate fingerprint (used to hide ourselves from scans).
+    pub fn fingerprint(&self) -> &str {
+        &self.fingerprint
+    }
+    /// Answers pending discovery queries. Called every worker tick and during
+    /// our own scans so this device stays visible while it is looking too.
+    pub fn respond(&self) -> Result<()> {
         // Bound work per tick even if a peer floods discovery packets.
         if let Some(udp) = &self.discovery {
             let mut buffer = [0; 2048];
@@ -281,10 +284,20 @@ impl Listener {
                     }
                     Ok(_) => {}
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    // Windows reports ICMP "port unreachable" from an earlier
+                    // reply as ConnectionReset on the next recv; it is harmless.
+                    Err(e) if e.kind() == io::ErrorKind::ConnectionReset => {}
                     Err(e) => return Err(e.into()),
                 }
             }
         }
+        Ok(())
+    }
+    pub fn accept(&self) -> Result<Option<Receiver>> {
+        if self.cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        self.respond()?;
         match self.tcp.accept() {
             Ok((tcp, source)) if local(source.ip()) => {
                 let mut connection = ServerConnection::new(self.config.clone())?;
@@ -301,11 +314,36 @@ impl Listener {
     }
 }
 
-pub fn discover(cancel: &AtomicBool) -> Result<Vec<Peer>> {
-    discover_at(
-        SocketAddr::from((Ipv4Addr::BROADCAST, DISCOVERY_PORT)),
-        cancel,
-    )
+/// Scans the LAN for Monolith devices. `own` (our listener, if receiving)
+/// keeps answering other scanners meanwhile and is filtered from the result.
+pub fn discover(cancel: &AtomicBool, own: Option<&Listener>) -> Result<Vec<Peer>> {
+    discover_at(&discovery_targets(), cancel, own)
+}
+/// IPv4 address of the interface that routes off-host. `connect` on UDP only
+/// picks a route; no packet is sent, so this works offline on a LAN too.
+fn primary_ipv4() -> Option<Ipv4Addr> {
+    let probe = UdpSocket::bind("0.0.0.0:0").ok()?;
+    probe.connect("8.8.8.8:80").ok()?;
+    match probe.local_addr().ok()?.ip() {
+        IpAddr::V4(ip) if ip.is_private() => Some(ip),
+        _ => None,
+    }
+}
+/// Limited broadcast alone is dropped by many routers/AP stacks and by Windows
+/// on multi-adapter machines (VPN, Hyper-V). Add the /24 directed broadcast
+/// and a unicast sweep of that /24 so at least one path reaches every peer.
+fn discovery_targets() -> Vec<SocketAddr> {
+    let mut targets = vec![SocketAddr::from((Ipv4Addr::BROADCAST, DISCOVERY_PORT))];
+    if let Some(ip) = primary_ipv4() {
+        let [a, b, c, own] = ip.octets();
+        targets.push(SocketAddr::from(([a, b, c, 255], DISCOVERY_PORT)));
+        targets.extend(
+            (1..=254u8)
+                .filter(|host| *host != own)
+                .map(|host| SocketAddr::from(([a, b, c, host], DISCOVERY_PORT))),
+        );
+    }
+    targets
 }
 fn parse_peer(v: &Value, source: SocketAddr, nonce: &str) -> Option<Peer> {
     if !local(source.ip())
@@ -327,11 +365,15 @@ fn parse_peer(v: &Value, source: SocketAddr, nonce: &str) -> Option<Peer> {
         fingerprint: fingerprint.to_ascii_lowercase(),
     })
 }
-fn discover_at(address: SocketAddr, cancel: &AtomicBool) -> Result<Vec<Peer>> {
+fn discover_at(
+    targets: &[SocketAddr],
+    cancel: &AtomicBool,
+    own: Option<&Listener>,
+) -> Result<Vec<Peer>> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
     socket.set_broadcast(true)?;
     socket.set_ttl(1)?;
-    socket.set_read_timeout(Some(Duration::from_millis(100)))?;
+    socket.set_read_timeout(Some(Duration::from_millis(50)))?;
     let mut nonce = [0; 16];
     SystemRandom::new()
         .fill(&mut nonce)
@@ -340,15 +382,37 @@ fn discover_at(address: SocketAddr, cancel: &AtomicBool) -> Result<Vec<Peer>> {
     let query = serde_json::to_vec(
         &json!({"app":"monolith-music","version":1,"type":"discover","nonce":nonce}),
     )?;
-    socket.send_to(&query, address)?;
-    let until = Instant::now() + Duration::from_secs(2);
+    let started = Instant::now();
+    let until = started + Duration::from_secs(2);
+    // Three bursts (0 s, 0.6 s, 1.2 s): a single datagram is easily lost on Wi-Fi.
+    let mut bursts = [0u64, 600, 1200].into_iter().peekable();
+    let mut sent_any = false;
     let mut peers = Vec::new();
     let mut buffer = [0; 2048];
     while Instant::now() < until && !cancel.load(Ordering::Relaxed) && peers.len() < MAX_PEERS {
+        if bursts
+            .peek()
+            .is_some_and(|at| started.elapsed() >= Duration::from_millis(*at))
+        {
+            bursts.next();
+            for target in targets {
+                // One unreachable/blocked target must not abort the scan.
+                sent_any |= socket.send_to(&query, target).is_ok();
+            }
+            if !sent_any {
+                return Err("Cannot reach the local network. Check that Wi-Fi or Ethernet is connected.".into());
+            }
+        }
+        if let Some(listener) = own {
+            let _ = listener.respond();
+        }
         match socket.recv_from(&mut buffer) {
             Ok((n, source)) if local(source.ip()) => {
                 if let Ok(v) = serde_json::from_slice::<Value>(&buffer[..n]) {
                     if let Some(peer) = parse_peer(&v, source, &nonce) {
+                        if own.is_some_and(|l| l.fingerprint == peer.fingerprint) {
+                            continue;
+                        }
                         if !peers.iter().any(|p: &Peer| p.address == peer.address) {
                             peers.push(peer);
                         }
@@ -359,7 +423,9 @@ fn discover_at(address: SocketAddr, cancel: &AtomicBool) -> Result<Vec<Peer>> {
             Err(e)
                 if matches!(
                     e.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::ConnectionReset
                 ) => {}
             Err(e) => return Err(e.into()),
         }
@@ -462,7 +528,7 @@ mod tests {
             }
             assert_eq!(db.tracks(0).unwrap().len(), 2);
         });
-        let peers = discover_at(discovery_address, &cancel)?;
+        let peers = discover_at(&[discovery_address], &cancel, None)?;
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].address, expected);
         assert_eq!(peers[0].fingerprint, expected_fingerprint);
@@ -492,6 +558,45 @@ mod tests {
             assert_eq!(std::fs::read(destination.join(name))?, wav);
         }
         Ok(())
+    }
+    #[test]
+    fn scan_answers_others_but_hides_this_device() -> Result<()> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let udp = UdpSocket::bind("127.0.0.1:0")?;
+        let address = udp.local_addr()?;
+        udp.set_nonblocking(true)?;
+        let mut own = Listener::bind_at("127.0.0.1:0", false, cancel.clone())?;
+        own.discovery = Some(udp);
+        // Our own responder replies to our own query; the scan must drop it.
+        assert!(discover_at(&[address], &cancel, Some(&own))?.is_empty());
+        // Without the filter the same responder is found, proving it answered
+        // while the scan loop (not accept) was driving it.
+        let found = std::thread::scope(|scope| {
+            let responder = scope.spawn(|| {
+                let until = Instant::now() + Duration::from_secs(3);
+                while Instant::now() < until && !cancel.load(Ordering::Relaxed) {
+                    own.respond().unwrap();
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            });
+            let found = discover_at(&[address], &AtomicBool::new(false), None);
+            cancel.store(true, Ordering::Relaxed);
+            responder.join().unwrap();
+            found
+        })?;
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].fingerprint, own.fingerprint());
+        Ok(())
+    }
+    #[test]
+    fn discovery_targets_always_include_limited_broadcast() {
+        let targets = discovery_targets();
+        assert_eq!(
+            targets[0],
+            SocketAddr::from((Ipv4Addr::BROADCAST, DISCOVERY_PORT))
+        );
+        assert!(targets.len() == 1 || targets.len() == 255);
+        assert!(targets.iter().all(|t| t.port() == DISCOVERY_PORT));
     }
     #[test]
     fn discovery_rejects_unusable_certificates_and_spoofed_replies() {

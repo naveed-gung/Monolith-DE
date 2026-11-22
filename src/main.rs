@@ -105,7 +105,9 @@ fn run() -> Result<()> {
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name(if low_power { "software" } else { "femtovg" }.into())
-        .with_winit_window_attributes_hook(|a| a.with_transparent(true))
+        // Transparency exists only for the Windows acrylic backdrop. On Linux a
+        // transparent surface left stale/white regions over the header and player bar.
+        .with_winit_window_attributes_hook(|a| a.with_transparent(cfg!(windows)))
         .select()?;
     let app = AppWindow::new()?;
     let _updater = update_ui::Updater::bind(&app, data.join("updates"));
