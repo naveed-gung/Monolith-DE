@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.2
 
 - Share (send/receive) moved into the sidebar rail below the pages; the Library
   header Share button is gone. Selected songs still share from the selection bar.
