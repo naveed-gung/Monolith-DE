@@ -16,6 +16,7 @@ export component NavGlyph inherits Rectangle {
             : root.kind == 1 ? @image-url("icons/music.svg")
             : root.kind == 2 ? @image-url("icons/search.svg")
             : root.kind == 3 ? @image-url("icons/download.svg")
+            : root.kind == 5 ? @image-url("icons/share.svg")
             : @image-url("icons/settings.svg");
         colorize: root.tint;
         accessible-role: none;

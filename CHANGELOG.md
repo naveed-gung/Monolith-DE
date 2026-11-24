@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Share (send/receive) moved into the sidebar rail below the pages; the Library
+  header Share button is gone. Selected songs still share from the selection bar.
+
 ## 0.7.1
 
 - Fixed song downloads failing with `yt-dlp`: removed invalid `--no-part-overwrites`

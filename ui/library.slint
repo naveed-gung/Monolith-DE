@@ -313,7 +313,6 @@ export component LibraryPage inherits Rectangle {
     private property <TourTarget> search-area;
     private property <TourTarget> collections-area;
     private property <TourTarget> import-area;
-    private property <TourTarget> share-area;
     private property <TourTarget> new-area;
     private property <TourTarget> folder-area;
     private property <TourTarget> rows-area;
@@ -325,7 +324,6 @@ export component LibraryPage inherits Rectangle {
         ? { x: root.search-area.x, y: root.search-area.y, width: root.search-area.width, height: root.search-area.height }
         : root.tour-kind == 3
         ? { x: root.collections-area.x, y: root.collections-area.y, width: root.collections-area.width, height: root.collections-area.height }
-        : root.tour-kind == 8 ? root.share-area
         : root.tour-kind == 4
         ? root.new-area
         : root.tour-kind == 7 ? root.sort-area
@@ -365,29 +363,15 @@ export component LibraryPage inherits Rectangle {
 
                 vertical-stretch: 0;
                 spacing: 8px;
-                HorizontalLayout {
-                    vertical-stretch: 0; spacing: 8px;
-                    TourAnchor {
-                        step: root.tour-kind; viewport-width: root.width; viewport-height: root.height;
-                        target-width: parent.width; target-height: parent.height;
-                        measure(area) => { root.share-area = area; }
-                    }
-                    Button {
-                        text: "Share";
-                        label: "Share music";
-                        icon: @image-url("icons/share.svg");
-                        icon-only: true;
-                        enabled: !root.selecting || root.selected-ids.length > 0;
-                        clicked => { root.open-sharing(); }
-                    }
-                    Button {
-                        text: root.selecting ? "Done" : "Select";
-                        label: root.selecting ? "Finish selecting songs" : "Select songs";
-                        icon: @image-url("icons/check.svg"); icon-only: root.compact;
-                        kind: root.selecting ? ButtonKind.primary : ButtonKind.secondary;
-                        enabled: root.selecting || root.tracks.length > 0;
-                        clicked => { root.selecting = !root.selecting; root.clear-selection(); root.adding-selected = false; }
-                    }
+                // Share lives in the sidebar; selected songs still share
+                // from the selection bar.
+                Button {
+                    text: root.selecting ? "Done" : "Select";
+                    label: root.selecting ? "Finish selecting songs" : "Select songs";
+                    icon: @image-url("icons/check.svg"); icon-only: root.compact;
+                    kind: root.selecting ? ButtonKind.primary : ButtonKind.secondary;
+                    enabled: root.selecting || root.tracks.length > 0;
+                    clicked => { root.selecting = !root.selecting; root.clear-selection(); root.adding-selected = false; }
                 }
                 Button {
                     TourAnchor {

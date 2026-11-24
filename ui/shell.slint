@@ -201,13 +201,18 @@ export component AppShell inherits FocusScope {
     // the tail lands on the row the card is actually about.
     // The three-row compact player consumes more height than the wide player.
     // Size navigation from the space actually left above it, not window height.
+    // 455 px = 94 px header + five 44 px pages + Share row + 13 px divider +
+    // 4 px gaps + 64 px footer; below that the rows tighten.
     private property <bool> tight-rail: root.viewport-height
-        - (root.viewport-height < 440px || root.viewport-width >= 760px ? 88px : 152px) < 394px;
+        - (root.viewport-height < 440px || root.viewport-width >= 760px ? 88px : 152px) < 455px;
     private property <length> nav-row: root.tight-rail ? 40px : 44px;
     private property <int> guide-page: root.guide-step >= 0 && root.guide-step < root.guide-steps.length
         ? root.guide-steps[root.guide-step].page : root.page;
     private property <length> nav-top: root.tight-rail ? 60px : 94px;
-    private property <length> guide-anchor: root.nav-top + root.guide-page * (root.nav-row + 4px) + root.nav-row / 2;
+    // Share sits after the five pages, below a 9 px divider plus its 4 px gap.
+    private property <length> share-gap: 13px;
+    private property <length> guide-anchor: root.nav-top + root.nav-row / 2
+        + (root.guide-kind == 9 ? 5 * (root.nav-row + 4px) + root.share-gap : root.guide-page * (root.nav-row + 4px));
 
     // Help and first-run onboarding share one section-aware tour.
     // Keep this public property for the existing Rust API.
@@ -218,7 +223,7 @@ export component AppShell inherits FocusScope {
         { title: "Your songs, up close", body: root.tracks.length == 0 ? "This is an example, without audio. Import your music to play; favorites and playlist actions live here." : "Click a song to play. Heart favorites it; the list adds it to playlists. Remove always asks first.", page: 0, target: 5 },
         { title: "Songs, the complete list", body: "Every imported song appears here. Click a song to play; its name or artwork in the player opens the full view.", page: 1, target: 0 },
         { title: "Make the list your own", body: "Sort by title, artist, album or newest first. Sorting changes the view, never your files.", page: 1, target: 7 },
-        { title: "Share your music", body: "Share offers Monolith app on the same network or paired Bluetooth. Use Select for several songs; each recipient approves before saving. Mobile needs the matching update.", page: 1, target: 8 },
+        { title: "Send and receive music", body: "Share, here in the sidebar, sends to and receives from Monolith on the same network or paired Bluetooth. Select songs first to send several; each recipient approves before saving.", page: 1, target: 9 },
         { title: "Search, find your next listen", body: "Look through the music on this device. Your searches stay private and local.", page: 2, target: 0 },
         { title: "Find a song quickly", body: "Type a title, artist or album here. Matching songs appear below as you type.", page: 2, target: 2 },
         { title: "Same songs, same actions", body: "Click a result to play. Heart saves a favorite. With no music yet, this row is a labelled example.", page: 2, target: 5 },
@@ -235,7 +240,7 @@ export component AppShell inherits FocusScope {
     private property <TourTarget> downloads-target;
     private property <TourTarget> settings-target;
     out property <TourTarget> guide-card-area: { x: coach.x, y: coach.y, width: coach.width, height: coach.height };
-    out property <TourTarget> guide-target: root.guide-kind == 0
+    out property <TourTarget> guide-target: root.guide-kind == 0 || root.guide-kind == 9
         ? { x: 12px, y: root.guide-anchor - root.nav-row / 2, width: root.rail-width-now - 24px, height: root.nav-row }
         : root.guide-page == 3 ? root.downloads-target
         : root.guide-page == 4 ? root.settings-target : root.library-target;
@@ -360,6 +365,28 @@ export component AppShell inherits FocusScope {
                             selected: root.page == index;
                             expand: root.rail-open;
                             clicked => { root.selected-page = index; }
+                        }
+                        // Share is an action, not a page: it opens the
+                        // send/receive window and never takes the selection.
+                        Rectangle {
+                            height: root.share-gap - 4px;
+                            vertical-stretch: 0;
+                            Rectangle {
+                                x: 4px;
+                                y: (parent.height - self.height) / 2;
+                                width: parent.width - 8px;
+                                height: 1px;
+                                background: Theme.border;
+                            }
+                        }
+                        NavItem {
+                            height: nav.nav-height;
+                            vertical-stretch: 0;
+                            label: "Share";
+                            glyph: 5;
+                            selected: false;
+                            expand: root.rail-open;
+                            clicked => { root.open-sharing(); }
                         }
                     }
                 }
@@ -665,7 +692,7 @@ export component AppShell inherits FocusScope {
             }
         }
         target: root.guide-target;
-        contextual: root.guide-kind != 0;
+        contextual: root.guide-kind != 0 && root.guide-kind != 9;
         rail-width: root.rail-width-now;
         viewport-width: root.viewport-width;
         viewport-height: root.viewport-height;
