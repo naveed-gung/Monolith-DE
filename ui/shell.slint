@@ -1,3 +1,4 @@
+import { SharePage, SharingState } from "nearby.slint";
 import { Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { NavItem, StatusBar, IconButton, SquareImage } from "controls.slint";
@@ -131,7 +132,6 @@ export component AppShell inherits FocusScope {
     callback batch-remove-playlist([int], int);
     callback batch-add([int], int);
     callback batch-create([int], string);
-    callback open-sharing;
     callback check-update;
     callback download-update;
     callback install-update;
@@ -186,11 +186,12 @@ export component AppShell inherits FocusScope {
     private property <length> footer-lift: root.viewport-width >= 900px
         ? 44px * (1 - clamp((root.rail-open - 0.3) / 0.7, 0, 1)) : 0px;
     private property <bool> compact-player: root.viewport-width < 760px;
-    private property <int> page: min(max(root.selected-page, 0), 4);
+    private property <int> page: min(max(root.selected-page, 0), 5);
     private property <bool> effective-light: root.theme-follow-system ? root.system-light : root.light;
-    private property <[string]> titles: ["Library", "Songs", "Search", "Downloads", "Settings"];
+    private property <[string]> titles: ["Library", "Songs", "Search", "Downloads", "Share", "Settings"];
     // Indices into the shared outline family, in the same order as `titles`.
-    private property <[int]> icons: [0, 1, 2, 3, 4];
+    private property <[int]> icons: [0, 1, 2, 3, 5, 4];
+    private property <[int]> nav-pages: [0, 1, 2, 3, 5, 4];
     in-out property <bool> player-open: false;
     in-out property <int> guide-step: 0;
     in-out property <bool> guide-open: false;
@@ -201,18 +202,19 @@ export component AppShell inherits FocusScope {
     // the tail lands on the row the card is actually about.
     // The three-row compact player consumes more height than the wide player.
     // Size navigation from the space actually left above it, not window height.
-    // 455 px = 94 px header + five 44 px pages + Share row + 13 px divider +
-    // 4 px gaps + 64 px footer; below that the rows tighten.
+    // Tight heights leave room for all six sections above the player.
     private property <bool> tight-rail: root.viewport-height
         - (root.viewport-height < 440px || root.viewport-width >= 760px ? 88px : 152px) < 455px;
-    private property <length> nav-row: root.tight-rail ? 40px : 44px;
+    private property <length> nav-row: root.tight-rail ? 32px : 44px;
     private property <int> guide-page: root.guide-step >= 0 && root.guide-step < root.guide-steps.length
         ? root.guide-steps[root.guide-step].page : root.page;
     private property <length> nav-top: root.tight-rail ? 60px : 94px;
-    // Share sits after the five pages, below a 9 px divider plus its 4 px gap.
-    private property <length> share-gap: 13px;
+    private property <length> section-gap: root.tight-rail ? 4px : 18px;
+    private property <int> guide-row: root.guide-kind == 9 || root.guide-page == 5
+        ? 4 : root.guide-page == 4 ? 5 : root.guide-page;
     private property <length> guide-anchor: root.nav-top + root.nav-row / 2
-        + (root.guide-kind == 9 ? 5 * (root.nav-row + 4px) + root.share-gap : root.guide-page * (root.nav-row + 4px));
+        + root.guide-row * (root.nav-row + 4px)
+        + (root.guide-row >= 4 ? root.section-gap : 0px);
 
     // Help and first-run onboarding share one section-aware tour.
     // Keep this public property for the existing Rust API.
@@ -268,6 +270,7 @@ export component AppShell inherits FocusScope {
     private property <bool> reveal: true;
     private property <bool> resetting: false;
     changed page => {
+        if root.page != 5 { SharingState.close(); }
         root.selecting = false; root.clear-selection();
         root.resetting = true;
         root.reveal = false;
@@ -351,42 +354,25 @@ export component AppShell inherits FocusScope {
                         x: 12px;
                         width: parent.width - 24px;
                         spacing: 4px;
-                        // A short window could only show four of the five
-                        // sections, which read as a broken rail rather than a
-                        // scrollable one. Tightening the rows keeps all five on
-                        // screen down to the 380 px floor. Not named `row`:
-                        // that is a layout property.
-                        private property <length> nav-height: root.tight-rail ? 40px : 44px;
-                        for label[index] in root.titles: NavItem {
-                            height: nav.nav-height;
+                        for label[index] in root.titles: Rectangle {
+                            height: root.nav-row + (index == 4 ? root.section-gap : 0px);
                             vertical-stretch: 0;
-                            label: label;
-                            glyph: root.icons[index];
-                            selected: root.page == index;
-                            expand: root.rail-open;
-                            clicked => { root.selected-page = index; }
-                        }
-                        // Share is an action, not a page: it opens the
-                        // send/receive window and never takes the selection.
-                        Rectangle {
-                            height: root.share-gap - 4px;
-                            vertical-stretch: 0;
-                            Rectangle {
-                                x: 4px;
-                                y: (parent.height - self.height) / 2;
-                                width: parent.width - 8px;
-                                height: 1px;
-                                background: Theme.border;
+                            NavItem {
+                                x: 0px;
+                                y: parent.height - root.nav-row;
+                                width: parent.width;
+                                height: root.nav-row;
+                                label: label;
+                                glyph: root.icons[index];
+                                selected: root.page == root.nav-pages[index];
+                                expand: root.rail-open;
+                                clicked => {
+                                    if root.nav-pages[index] == 5 && root.page != 5 {
+                                        SharingState.open(false);
+                                    }
+                                    root.selected-page = root.nav-pages[index];
+                                }
                             }
-                        }
-                        NavItem {
-                            height: nav.nav-height;
-                            vertical-stretch: 0;
-                            label: "Share";
-                            glyph: 5;
-                            selected: false;
-                            expand: root.rail-open;
-                            clicked => { root.open-sharing(); }
                         }
                     }
                 }
@@ -407,7 +393,7 @@ export component AppShell inherits FocusScope {
                     }
                 }
                 // Utilities occupy separate 40 px slots. Short narrow windows
-                // use the brand slot for Help, leaving all five pages visible.
+                // use the brand slot for Help, leaving all six pages visible.
                 // Expansion is offered only where the expanded rail can fit.
                 // Shared rail-open geometry keeps the two slots apart mid-animation.
                 help := IconButton {
@@ -472,7 +458,7 @@ export component AppShell inherits FocusScope {
                             opacity: root.reveal ? 1 : 0;
                             animate y, opacity { duration: root.resetting ? 0ms : Theme.slow; }
                             if root.page < 3: LibraryPage {
-                                open-sharing => { root.open-sharing(); }
+                                open-sharing => { SharingState.open(true); root.selected-page = 5; }
                                 selecting <=> root.selecting;
                                 selected-ids: root.selected-ids;
                                 all-visible-selected: root.all-visible-selected;
@@ -529,6 +515,7 @@ export component AppShell inherits FocusScope {
                                 start-download(url, mp3) => { root.start-download(url, mp3); }
                                 cancel-download => { root.cancel-download(); }
                             }
+                            if root.page == 5: SharePage {}
                             if root.page == 4: SettingsPage {
                                 update-status: root.update-status;
                                 update-busy: root.update-busy;

@@ -2810,7 +2810,7 @@ dependencies = [
 
 [[package]]
 name = "monolith-setup"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "dirs",
  "ring",

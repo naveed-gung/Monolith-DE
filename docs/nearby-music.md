@@ -1,7 +1,7 @@
 # Monolith Nearby — app and Bluetooth song sharing
 
-Desktop 0.6.0 offers **Library/Songs → Share icon → Monolith app or Bluetooth**.
-Settings no longer contains a sharing shortcut. **Select** reveals a checkbox
+Open **Share** in the sidebar and choose **Wi-Fi** or **Bluetooth**.
+In Library or Songs, **Select** reveals a checkbox
 beside every visible song; row/title clicks select instead of starting playback.
 Select all affects visible results only; existing hidden selections remain in
 the count. Selection IDs survive filtering and sorting and clear when changing
@@ -14,17 +14,17 @@ Share accepts up to **100 selected songs**, each at most **100,000,000 bytes**.
 One song per connection retains the existing v1 wire contract. Every file is
 preflighted before the first send. Each recipient approves each offer; completed
 receipts are counted and errors report partial completion honestly. No resume.
-On **Monolith app (Wi-Fi)** the Share window itself is the receiving session:
-while it is open on that method this device is visible as its session alias
+On **Monolith app (Wi-Fi)** the Share page is the receiving session:
+while the page is active on that method this device is visible as its session alias
 and can both send and receive, like the mobile Share hub. There is no separate
 Receive step. Bluetooth keeps the explicit five-minute Receive session. Every
 incoming song still needs the recipient's approval. Hashing, discovery,
 transfer and imports run off the UI thread.
 Nothing advertises or opens sharing sockets at app startup. Sockets exist only
-while the Share window is open on Monolith app (or during Bluetooth Receive).
-Closing the window stops discovery and drops the listener. Cancel aborts the
-active transfer; Wi-Fi visibility resumes on the next scan while the window
-stays open. There is no background sharing service, autostart listener or
+while the Share page is active on Wi-Fi (or during Bluetooth Receive).
+Leaving the page stops discovery and drops the listener. Cancel aborts the
+active transfer; Wi-Fi visibility resumes on the next scan while the page
+stays active. There is no background sharing service, autostart listener or
 unattended acceptance.
 
 ## Monolith app over Wi-Fi / Ethernet
@@ -32,7 +32,7 @@ unattended acceptance.
 This transport is implemented in portable Rust, but only Windows execution and
 loopback interoperability have been tested. Mobile needs the matching update.
 Use the same IPv4 local network. Both people open **Share → Monolith app**; the
-window shows "Visible as <alias>". The sender selects the recipient's session
+page shows "Visible as <alias>". The sender selects the recipient's session
 name and sends. Nearby devices refresh automatically while the picker is open
 and stay listed for 15 seconds after their last answer, so one lost datagram
 does not make them flicker; Refresh also rescans on demand. The recipient approves each song before saving.
@@ -60,8 +60,8 @@ wrong nonces and other app IDs are rejected. Scans repeat after five seconds
 without disabling controls or resetting song choices. Device selection uses a
 stable address/certificate ID; reordering or disappearance cannot reroute Send.
 
-The recipient listens on an ephemeral TCP port only while the Share window is
-open on Monolith app.
+The recipient listens on an ephemeral TCP port only while the Share page is
+active on Wi-Fi.
 Each receiving session generates an ephemeral P-256 key/self-signed X.509 cert.
 The **64-hex-character fingerprint** is SHA-256 of the DER cert, supplied by
 discovery and used internally. TLS **1.3 only**, Rustls with ring, matches that

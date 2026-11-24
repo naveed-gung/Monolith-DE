@@ -5,7 +5,7 @@ import { AppShell } from "shell.slint";
 import { TourTarget } from "guide.slint";
 import { TrackRow } from "library.slint";
 import { Button, ButtonKind } from "controls.slint";
-export { NearbyWindow } from "nearby.slint";
+export { ShareSong, SharingState } from "nearby.slint";
 
 // The root component is intentionally thin. It preserves the stable public API
 // consumed by Rust while the redesigned desktop surfaces live in focused files.
@@ -152,7 +152,6 @@ export component AppWindow inherits Window {
     callback batch-remove-playlist([int], int);
     callback batch-add([int], int);
     callback batch-create([int], string);
-    callback open-sharing;
     callback check-update;
     callback download-update;
     callback install-update;
@@ -215,7 +214,6 @@ export component AppWindow inherits Window {
         batch-remove-playlist(ids, playlist) => { root.batch-remove-playlist(ids, playlist); }
         batch-add(ids, playlist) => { root.batch-add(ids, playlist); }
         batch-create(ids, name) => { root.batch-create(ids, name); }
-        open-sharing => { root.open-sharing(); }
         check-update => { root.check-update(); }
         download-update => { root.download-update(); }
         install-update => { root.install-update(); }

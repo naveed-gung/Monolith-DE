@@ -4,6 +4,9 @@
 
 use std::{env, fs, path::PathBuf, process::Command};
 
+#[path = "../assets/compile-windows-resource.rs"]
+mod windows_resource;
+
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -22,6 +25,12 @@ fn main() {
         // The installer is Windows-only; skip the embedded payload elsewhere.
         return;
     }
+
+    let resource = windows_resource::compile(&root, "assets/setup.rc", "setup.res");
+    println!(
+        "cargo:rustc-link-arg-bin=monolith-setup={}",
+        resource.display()
+    );
 
     // The interface lives beside the player and imports ../controls.slint, so
     // it is compiled in place rather than copied into OUT_DIR.

@@ -170,12 +170,11 @@ Public release distribution and the Linux build are on hold; the Windows app can
 still be built and installed locally.
 
 The [desktop workflow](.github/workflows/desktop-build.yml) builds the Windows
-setup `.exe` and native Linux `.deb` on **standard public-repository runners**.
-It refuses private-repository execution, uses no Actions cache/artifact storage,
-and keeps generated build directories out of Git. Version tags attach only
-final packages, platform-specific checksums and metadata to a **draft release**.
-Review both jobs and publish that draft before the in-app updater can find it.
-Main/PR runs are build checks and retain no installer artifacts.
+native Linux `.deb` on one standard Ubuntu runner for pull requests, manual
+dispatch, version tags and versioned release branches. Windows setup is built offline on Windows from the
+same tag. The workflow skips private repositories and does not use Actions
+artifact storage. Version tags attach Linux packages and metadata to a draft.
+Attach the Windows installer and its metadata to that draft before publishing.
 
 Under [GitHub's current public-runner pricing](https://docs.github.com/en/billing/concepts/product-billing/github-actions),
 this setup uses free execution. Release assets are distributed separately from
@@ -185,10 +184,10 @@ settings or other repositories.
 
 ### Nearby music sharing
 
-**Windows 0.6.0:** use the Share icon in **Library** or **Songs**, then choose
-**Monolith app** (same Wi-Fi/Ethernet) or **Bluetooth**. Select reveals row
-checkboxes and a toolbar for sharing a batch, adding songs to playlists,
-creating a populated playlist or removing entries after confirmation.
+Open **Share** in the sidebar, then choose **Wi-Fi** (same local network) or
+**Bluetooth**. To send a batch, use **Select** in Library or Songs and choose
+**Share selected songs**. The selection toolbar can also add songs to playlists,
+create a populated playlist or remove entries after confirmation.
 Current, selected and hovered songs use distinct colors in both themes.
 
 Wi-Fi automatically discovers receiving Monolith devices and matches the
@@ -198,8 +197,9 @@ RFCOMM pairing. Both reuse bounded offers, explicit approval, audio/SHA-256
 validation, atomic no-overwrite saves and importer receipts. Share up to 100
 songs, each up to 100 MB; each song has its own approval and receipt.
 No account, cloud relay or paid service.
-Sharing stays off at startup. Open Share to discover devices; Receive starts
-the foreground listener. Close or Cancel closes its sharing sockets.
+Sharing stays off at startup. Wi-Fi makes this device visible while that Share
+page is active. Bluetooth requires **Receive**. Leaving Share stops discovery
+and closes the listener.
 The Songs guide spotlights Share and Select in its third step. Discovery names
 are local hints, not verified identities; use a trusted network.
 

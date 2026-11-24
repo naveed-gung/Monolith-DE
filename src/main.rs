@@ -184,7 +184,7 @@ fn run() -> Result<()> {
     let (tx, rx) = mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let worker = controller::spawn(db, app.as_weak(), rx, tx.clone(), cancel.clone());
-    let sharing = nearby_ui::Sharing::bind(&app, data.clone(), tx.clone())?;
+    let sharing = nearby_ui::Sharing::bind(&app, data.clone(), tx.clone());
     let _tool_installer = tool_ui::Tools::bind(&app, tx.clone());
     {
         // Probe helpers in the background: saved paths first, then the managed
@@ -561,6 +561,9 @@ fn run() -> Result<()> {
                     let weak = app.as_weak();
                     app.on_hide_to_tray(move || {
                         if let Some(ui) = weak.upgrade() {
+                            if ui.get_selected_page() == 5 {
+                                ui.set_selected_page(0);
+                            }
                             native::hide_to_tray(&ui);
                         }
                     });

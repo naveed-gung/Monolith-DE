@@ -18,9 +18,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         || !height.is_finite()
         || width < 420.
         || height < 380.
-        || !(0..5).contains(&page)
+        || !(0..6).contains(&page)
     {
-        return Err("Use a finite size of at least 420x380 and page 0 through 4".into());
+        return Err("Use a finite size of at least 420x380 and page 0 through 5".into());
     }
     let mode = args.get(5).map(String::as_str);
     if mode.is_some_and(|value| {
@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if mode == Some("guide") {
         // Opens the coaching overlay over the page it describes, so the copy
         // can be reviewed against the controls it points at.
-        ui.set_guide_step([0, 3, 6, 9, 12][page as usize]);
+        ui.set_guide_step([0, 3, 6, 9, 12, 5][page as usize]);
         ui.set_guide_open(true);
     }
     // Synthetic rows for the review modes, so a snapshot has something to draw
@@ -179,16 +179,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             88.
         };
         let rail_height = height - player_height;
-        let tight = rail_height < 394.;
-        let nav_row = if tight { 40. } else { 44. };
+        let tight = rail_height < 455.;
+        let nav_row = if tight { 32. } else { 44. };
         let nav_top = if tight { 60. } else { 94. };
-        let nav_y = |page: i32| nav_top + page as f32 * (nav_row + 4.) + nav_row / 2.;
+        let nav_y = |row: usize| {
+            nav_top
+                + row as f32 * (nav_row + 4.)
+                + nav_row / 2.
+                + if row >= 4 {
+                    if tight { 4. } else { 18. }
+                } else {
+                    0.
+                }
+        };
+        let pages = [0, 1, 2, 3, 5, 4];
         // On a short window the rail genuinely cannot show every row at
         // once, so only the visible ones are clicked; Tab still reaches all
-        // five because focus scrolls them into view.
+        // six because focus scrolls them into view.
         let nav_area =
             (rail_height - nav_top - if tight && width < 900. { 12. } else { 64. }).max(0.);
-        let mouse_pages = (((nav_area + 4.) / (nav_row + 4.)).floor() as i32).clamp(1, 5);
+        let mouse_pages = (0..pages.len())
+            .take_while(|row| nav_y(*row) + nav_row / 2. <= nav_top + nav_area)
+            .count();
         let click = |x: f32, y: f32| {
             let position = slint::LogicalPosition::new(x, y);
             window.dispatch_event(WindowEvent::PointerMoved { position });
@@ -201,8 +213,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 button: PointerEventButton::Left,
             });
         };
-        for page in 0..mouse_pages {
-            click(x, nav_y(page));
+        for (row, &page) in pages.iter().take(mouse_pages).enumerate() {
+            click(x, nav_y(row));
             assert_eq!(capture_ui.get_selected_page(), page, "mouse page {page}");
             // Focus is on that row now, so Space and Enter must activate it.
             capture_ui.set_selected_page((page + 1) % 5);
@@ -214,7 +226,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         // Tab reaches every row, including ones the rail had to scroll.
         click(x, nav_y(0));
-        for page in 1..5 {
+        for &page in &pages[1..] {
             key(Key::Tab.into());
             key(" ".into());
             assert_eq!(capture_ui.get_selected_page(), page, "Tab page {page}");

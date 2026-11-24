@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Exe)
+﻿param([Parameter(Mandatory=$true)][string]$Exe)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
 Add-Type @'
@@ -138,80 +138,55 @@ try {
  Invoke-Control $main 'Example'
  Start-Sleep -Seconds 1
  [void](Control $main 'Pause')
- # Invoke the actual Library entry point, not the sharing-window constructor.
- Invoke-Control $main 'Share music'
- $sharing=Find-Window 'Share music · Monolith'
- [void][NearbyNative]::SetWindowPos([IntPtr]$sharing.Current.NativeWindowHandle,[IntPtr](-1),40,40,636,759,0x0040)
- [void][NearbyNative]::SetForegroundWindow([IntPtr]$sharing.Current.NativeWindowHandle)
- Start-Sleep -Seconds 2
- Capture $sharing 'sharing-chooser'
- Invoke-Control $sharing 'Share via Bluetooth'
- Start-Sleep -Seconds 1
- Invoke-Control $sharing 'Example · Unknown artist'
+ # The sidebar route must render inside the player window.
+ Invoke-Control $main 'Share'
+ [void](Control $main 'Pause')
+ Capture $main 'sharing-chooser'
+ Invoke-Control $main 'Use Bluetooth'
  $status='No Bluetooth radio available. Enable Bluetooth or connect an adapter, then refresh.'
- [void](Control $sharing $status)
- foreach($name in @('Send song','Receive')) { if((Control $sharing $name).Current.IsEnabled) { throw "No-radio $name must be disabled." } }
- Capture $sharing 'sharing-wide'
- Invoke-Control $sharing 'Refresh nearby devices and songs'
- Start-Sleep -Seconds 1
- [void](Control $sharing $status)
- Capture $main 'library-share-entry'
- [void][NearbyNative]::SetWindowPos([IntPtr]$sharing.Current.NativeWindowHandle,[IntPtr](-1),40,40,436,419,0x0040)
- Start-Sleep -Milliseconds 700
- Capture $sharing 'sharing-minimum'
- # Wi-Fi is independent of Bluetooth hardware and starts only on explicit Receive.
- Invoke-Control $sharing 'Change sharing method'
- Invoke-Control $sharing 'Share via Monolith app'
- Start-Sleep -Seconds 3
- if(-not (Control $sharing 'Receive').Current.IsEnabled) { throw 'Wi-Fi Receive must be available without Bluetooth hardware.' }
- Invoke-Control $sharing 'Receive'
- Start-Sleep -Seconds 1
- [void](Control $sharing 'READY TO RECEIVE')
- if(@(Get-NetUDPEndpoint -OwningProcess $app.Id -LocalPort 45881 -ErrorAction SilentlyContinue).Count -ne 1) { throw 'Explicit Wi-Fi Receive must own its scoped discovery listener.' }
- $names=$sharing.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }
- if($names -contains 'Copy key' -or $names -contains 'Recipient verification key') { throw 'Sharing must not require copying verification codes.' }
- Capture $sharing 'wifi-receiving-minimum'
- Invoke-Control $sharing 'Cancel'
- Start-Sleep -Seconds 1
+ [void](Control $main $status)
+ foreach($name in @('Send song','Receive')) { if((Control $main $name).Current.IsEnabled) { throw "No-radio $name must be disabled." } }
+ Capture $main 'sharing-wide'
+ Invoke-Control $main 'Refresh nearby devices and songs'
+ [void](Control $main $status)
+ Invoke-Control $main 'Change sharing method'
+ Invoke-Control $main 'Use Wi-Fi'
+ $until=[DateTime]::UtcNow.AddSeconds(8)
+ do {
+  $listeners=@(Get-NetUDPEndpoint -OwningProcess $app.Id -LocalPort 45881 -ErrorAction SilentlyContinue)
+  if($listeners.Count -eq 1) { break }
+  Start-Sleep -Milliseconds 200
+ } while([DateTime]::UtcNow -lt $until)
+ if($listeners.Count -ne 1) { throw 'Wi-Fi Share must own one scoped discovery listener.' }
+ Invoke-Control $main 'Library'
  Assert-NoSharingSockets
- [void][NearbyNative]::PostMessage([IntPtr]$sharing.Current.NativeWindowHandle,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
- Start-Sleep -Milliseconds 500
- Assert-NoSharingSockets
- [void][NearbyNative]::ShowWindow([IntPtr]$main.Current.NativeWindowHandle,9)
  [void][NearbyNative]::SetWindowPos([IntPtr]$main.Current.NativeWindowHandle,[IntPtr](-1),20,20,436,419,0x0040)
- Start-Sleep -Milliseconds 600
- $entry=Control $main 'Share music'
- if($entry.Current.BoundingRectangle.Right -gt $main.Current.BoundingRectangle.Right) { throw 'Compact sharing entry overflows the main window.' }
- Capture $main 'library-minimum'
- Invoke-Control $main 'Share music'
- $sharing=Find-Window 'Share music · Monolith'
- Start-Sleep -Seconds 1
- Invoke-Control $sharing 'Share via Bluetooth'
- Start-Sleep -Seconds 1
- [void](Control $sharing $status)
- [void][NearbyNative]::PostMessage([IntPtr]$sharing.Current.NativeWindowHandle,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
- Start-Sleep -Milliseconds 500
+ Invoke-Control $main 'Share'
+ Capture $main 'sharing-minimum'
+ Invoke-Control $main 'Use Bluetooth'
+ [void](Control $main $status)
+ Invoke-Control $main 'Library'
+ Assert-NoSharingSockets
  Invoke-Control $main 'Select songs'
  Invoke-Control $main 'Select Example'
  [void](Control $main '1 selected')
  Invoke-Control $main 'Show app guide'
  for($step=0;$step -lt 5;$step++) { Invoke-Control $main 'Next' }
- [void](Control $main 'Share your music')
+ [void](Control $main 'Send and receive music')
  Capture $main 'sharing-guide-minimum'
  Invoke-Control $main 'Close guide'
+ Invoke-Control $main 'Library'
  Invoke-Control $main 'Select songs'
  Invoke-Control $main 'Select all visible songs'
  [void](Control $main '3 selected')
  Capture $main 'selection-minimum'
  Invoke-Control $main 'Share selected songs'
- $sharing=Find-Window 'Share music · Monolith'
- Start-Sleep -Milliseconds 600
- Invoke-Control $sharing 'Share via Bluetooth'
- Start-Sleep -Seconds 1
- [void](Control $sharing '3 selected songs. Change this selection in Library or Songs.')
- if((Control $sharing 'Example · Unknown artist').Current.IsEnabled) { throw 'Batch sharing must keep the library selection locked.' }
- [void][NearbyNative]::PostMessage([IntPtr]$sharing.Current.NativeWindowHandle,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
- Start-Sleep -Milliseconds 500
+ Invoke-Control $main 'Use Bluetooth'
+ [void](Control $main '3 selected songs. Change this selection in Library or Songs.')
+ if((Control $main 'Example · Unknown artist').Current.IsEnabled) { throw 'Batch sharing must keep the library selection locked.' }
+ Invoke-Control $main 'Library'
+ Invoke-Control $main 'Select songs'
+ Invoke-Control $main 'Select all visible songs'
  Invoke-Control $main 'Create playlist from selected songs'
  $field=Control $main 'New playlist name'
  $field.SetFocus()
@@ -248,7 +223,7 @@ assert len(list((p/'music').glob('*.wav')))==3
  Invoke-Control $main 'Finish selecting songs'
  if((Control $main 'Select songs').Current.IsEnabled) { throw 'Empty library Select must be disabled after leaving selection.' }
  Capture $main 'empty-after-removal'
- $results += 'Title playback, sharing chooser, Bluetooth no-radio state, Wi-Fi Receive/Cancel, no sharing sockets before Share/after Cancel or Close, compact layouts, sharing guide, selection boxes/select-all, locked three-song sharing selection, bulk playlist creation, removal Cancel/Confirm and preservation of originals passed.'
+ $results += 'Title playback, integrated Share page, Bluetooth no-radio state, Wi-Fi visibility, no sharing sockets before entering or after leaving Share, compact layouts, sharing guide, selection boxes/select-all, locked three-song sharing selection, bulk playlist creation, removal Cancel/Confirm and preservation of originals passed.'
  $app.Refresh()
  $results += "Sharing process working set: $([math]::Round($app.WorkingSet64/1MB,1)) MiB; private: $([math]::Round($app.PrivateMemorySize64/1MB,1)) MiB."
  $results | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'result.json')

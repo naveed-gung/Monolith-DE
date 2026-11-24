@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.3
+
+- Share is a full page within the main window, with Wi-Fi and Bluetooth options,
+  song search, a persistent player, and support for sharing selected songs.
+- Windows setup embeds the Monolith icon and installed shortcuts use the
+  installed icon file.
+- Linux packaging runs on one CI runner. Windows setup is built offline.
+
 ## 0.7.2
 
 - Share (send/receive) moved into the sidebar rail below the pages; the Library

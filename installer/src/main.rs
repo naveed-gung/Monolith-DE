@@ -240,13 +240,18 @@ fn desktop_dir() -> Option<PathBuf> {
 
 /// Writes a .lnk through PowerShell's WScript.Shell, which is present on every
 /// Windows install. Argument arrays are used throughout; no shell strings.
-fn write_shortcut(link: &Path, target: &Path, description: &str) -> Result<(), String> {
+fn write_shortcut(
+    link: &Path,
+    target: &Path,
+    icon: &Path,
+    description: &str,
+) -> Result<(), String> {
     let script = format!(
-        "$s = (New-Object -ComObject WScript.Shell).CreateShortcut({}); $s.TargetPath = {}; $s.Description = {}; $s.IconLocation = '{}'; $s.Save()",
+        "$s = (New-Object -ComObject WScript.Shell).CreateShortcut({}); $s.TargetPath = {}; $s.Description = {}; $s.IconLocation = {}; $s.Save()",
         ps_literal(&link.to_string_lossy()),
         ps_literal(&target.to_string_lossy()),
         ps_literal(description),
-        target.to_string_lossy().replace('\'', "''")
+        ps_literal(&format!("{},0", icon.display()))
     );
     run_powershell(&script).map_err(|e| e.to_string())
 }
@@ -402,7 +407,7 @@ fn install_to(
         if let Some(directory) = directory {
             let link = directory.join("Monolith.lnk");
             if enabled {
-                write_shortcut(&link, &app, "Monolith")?;
+                write_shortcut(&link, &app, &location.join("monolith.ico"), "Monolith")?;
             } else if link.exists() {
                 fs::remove_file(&link).map_err(|e| e.to_string())?;
             }

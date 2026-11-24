@@ -112,15 +112,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.show()?;
     let compact = width < 760.;
     let rail_height = height - if compact && height >= 440. { 152. } else { 88. };
-    let tight = rail_height < 394.;
+    let tight = rail_height < 455.;
     let nav_top = if tight { 60. } else { 94. };
-    let nav_row = if tight { 40. } else { 44. };
+    let nav_row = if tight { 32. } else { 44. };
     let rail = if width < 900. || ui.get_rail_collapsed() {
         72.
     } else {
         224.
     };
-    let nav_y = move |page: i32| nav_top + page as f32 * (nav_row + 4.) + nav_row / 2.;
+    let nav_y = move |page: i32| {
+        let row = [0, 1, 2, 3, 5, 4][page as usize];
+        nav_top
+            + row as f32 * (nav_row + 4.)
+            + nav_row / 2.
+            + if row >= 4 {
+                if tight { 4. } else { 18. }
+            } else {
+                0.
+            }
+    };
     let help_y = if tight && width < 900. {
         28.
     } else {
