@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1
+
+- Fixed song downloads failing with `yt-dlp`: removed invalid `--no-part-overwrites`
+  and `--no-write-thumbnail-to-console` flags, and prevented Linux builds from
+  downloading Windows helper binaries in Settings.
+- Music Share: keep Wi-Fi listener visible while Share is open, improve LAN peer
+  discovery and cover-art transfer, and fix opaque canvas rendering on Linux.
+- Linux: import M4A files with trailing-moov/non-standard tags via decoder
+  fallback, and package full hicolor raster PNG icons in the `.deb`.
+
 ## 0.7.0
 
 - Fixed a blank-window bug: after minimize→restore or maximize the software

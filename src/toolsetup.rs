@@ -236,6 +236,10 @@ pub fn install(
     cancelled: &AtomicBool,
     mut progress: impl FnMut(f32, String),
 ) -> Result<tools::Found> {
+    if !cfg!(windows) {
+        let label = tool.label();
+        return Err(format!("Install {label} with your system package manager.").into());
+    }
     let dir = tools::managed_dir().ok_or("No folder for managed tools.")?;
     fs::create_dir_all(&dir)?;
     match tool {

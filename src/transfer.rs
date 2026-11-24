@@ -42,7 +42,6 @@ pub fn arguments(url: &str, directory: &Path, mp3: bool, ffmpeg: Option<&Path>) 
         "--no-colors",
         "--no-cache-dir",
         "--no-overwrites",
-        "--no-part-overwrites",
         "--socket-timeout",
         "20",
         "--retries",
@@ -61,7 +60,6 @@ pub fn arguments(url: &str, directory: &Path, mp3: bool, ffmpeg: Option<&Path>) 
         // Keep the source thumbnail beside the audio so the artwork travels
         // with the file even before it is embedded in the player.
         "--write-thumbnail",
-        "--no-write-thumbnail-to-console",
         "-P",
     ]
     .into_iter()
@@ -386,6 +384,8 @@ mod tests {
         assert_eq!(args.last().unwrap(), &link);
         assert!(args.contains(&"--ignore-config".into()));
         assert!(args.contains(&"--write-thumbnail".into()));
+        assert!(!args.contains(&"--no-part-overwrites".into()));
+        assert!(!args.contains(&"--no-write-thumbnail-to-console".into()));
         let source = root.path().join("source.m4a");
         std::fs::write(&source, b"audio")?;
         let destination = root.path().join("destination");
