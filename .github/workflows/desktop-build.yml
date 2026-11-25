@@ -1,5 +1,7 @@
 name: Desktop packages
 
+# Main pushes run nothing. A release/v* branch or v* tag builds both
+# platforms and attaches them to a draft; publishing stays manual.
 on:
   push:
     branches: ['release/v*']
@@ -16,22 +18,24 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
-  package:
-    # Use a free standard public runner for the Linux package.
+  release:
+    # Private/larger runners are deliberately forbidden by this workflow.
     if: github.event.repository.private == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    env:
-      CARGO_BUILD_JOBS: '2'
-      CARGO_TERM_COLOR: always
-      RUSTUP_TOOLCHAIN: '1.98.1'
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
 
-      - name: Check release version
-        id: version
+      - name: Prepare draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           case "$GITHUB_REF" in
             refs/tags/v*) tag="$GITHUB_REF_NAME" ;;
@@ -39,53 +43,115 @@ jobs:
             *) tag="" ;;
           esac
           if [[ -n "$tag" ]]; then
-            GITHUB_REF="refs/tags/$tag" GITHUB_REF_NAME="$tag"               python tools/package-metadata.py --check-version
+            GITHUB_REF="refs/tags/$tag" GITHUB_REF_NAME="$tag" python tools/package-metadata.py --check-version
           else
             python tools/package-metadata.py --check-version
           fi
+          if [[ -z "$tag" || "$GITHUB_EVENT_NAME" != push ]]; then
+            echo 'Build/check only. Nothing is published.'
+            exit 0
+          fi
+          # A release branch creates its tag. A tag made with GITHUB_TOKEN
+          # starts no second run.
+          if [[ "$GITHUB_REF" == refs/heads/release/v* ]]; then
+            tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha 2>/dev/null) || {
+              gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA" --silent
+              tag_sha="$GITHUB_SHA"
+            }
+            test "$tag_sha" = "$GITHUB_SHA"
+          fi
+          if draft=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [[ "$draft" != true ]]; then
+              echo 'Release already published. Refusing to change its packages.' >&2
+              exit 1
+            fi
+          else
+            gh release create "$tag" --verify-tag --draft \
+              --title "Monolith Desktop $tag" \
+              --notes 'Windows and Linux packages are being built. Publish only after both jobs succeed and the packages are reviewed.'
+          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Install build tools
+  package:
+    needs: release
+    if: github.event.repository.private == false
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            platform: windows-x86_64
+            jobs: '1'
+          - os: ubuntu-24.04
+            platform: linux-amd64
+            jobs: '2'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: ${{ matrix.jobs }}
+      CARGO_TERM_COLOR: always
+      RUSTUP_TOOLCHAIN: '1.98.1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt
+
+      - name: Install Linux build libraries
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y build-essential pkg-config dpkg-dev \
             libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev \
             libxi-dev libxcursor-dev libgl1-mesa-dev libfontconfig1-dev imagemagick
-          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt
 
       - name: Format
+        shell: bash
         run: |
           cargo fmt --all --check
           cargo fmt --manifest-path installer/Cargo.toml --all --check
 
-      - name: Test and package Linux
+      - name: Test player
+        shell: bash
         run: |
-          cargo test --release --locked --lib --bin monolith-desktop -- --skip tools::tests::saved_path_is_checked_first_and_missing_tools_report_none
-          cargo build --release --locked --bin monolith-desktop
-          sh packaging/linux/build-deb.sh
-          python tools/package-metadata.py --platform linux-amd64 --directory dist
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            cargo test --release --locked --lib --bin monolith-desktop -- --skip tools::tests::saved_path_is_checked_first_and_missing_tools_report_none
+          else
+            cargo test --release --locked --lib --bin monolith-desktop
+          fi
 
-      - name: Attach Debian package to release draft
-        if: github.event_name == 'push' && steps.version.outputs.tag != ''
+      - name: Build player
+        run: cargo build --release --locked --bin monolith-desktop
+
+      - name: Build Windows setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:MONOLITH_PLAYER_EXE = (Resolve-Path target/release/monolith-desktop.exe).Path
+          cargo build --manifest-path installer/Cargo.toml --release --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item -LiteralPath installer/target/release/monolith-setup.exe -Destination dist/monolith-setup.exe
+
+      - name: Package Linux Debian archive
+        if: runner.os == 'Linux'
+        run: sh packaging/linux/build-deb.sh
+
+      - name: Generate package checksums
+        shell: bash
+        run: python tools/package-metadata.py --platform '${{ matrix.platform }}' --directory dist
+
+      # Release assets use no billable Actions artifact/cache storage. PR and
+      # manual runs keep logs only; a release stores just the final packages.
+      - name: Attach packages to draft release
+        if: needs.release.outputs.tag != ''
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          # A release branch stages Linux when the tag must be created by CI.
-          if [[ "$GITHUB_REF" == refs/heads/release/v* ]]; then
-            tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha 2>/dev/null) || {
-              gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$RELEASE_TAG" -f sha="$GITHUB_SHA" --silent
-              tag_sha="$GITHUB_SHA"
-            }
-            test "$tag_sha" = "$GITHUB_SHA"
-          fi
-          if draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
-            test "$draft" = true
-            gh release upload "$RELEASE_TAG" dist/*
-          else
-            gh release create "$RELEASE_TAG" dist/* --verify-tag --draft \
-              --title "Monolith Desktop $RELEASE_TAG" \
-              --notes 'Review the Debian package and attach the offline Windows installer before publishing.'
-          fi
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY"
     permissions:
       contents: write
