@@ -1,14 +1,15 @@
-//! One foreground sharing worker. Transport and disk work stay off Slint's thread.
-use crate::{AppWindow, ShareSong, SharingState, controller::Command};
+//! One foreground sharing worker plus an off-thread cover-thumbnail loader.
+//! Transport, hashing, and artwork decoding stay off Slint's UI thread.
+use crate::{AppWindow, ShareDevice, ShareSong, SharingState, controller::Command};
 use monolith_desktop::{
     bluetooth, lan,
-    library::{Library, Result, Track},
+    library::{self, Library, Result, Track},
     nearby,
 };
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     rc::Rc,
     sync::{
@@ -28,8 +29,42 @@ enum Action {
     Close,
     Shutdown,
 }
+
+enum ThumbAction {
+    Catalog(Vec<(i64, String)>),
+    Request(i64),
+    Select(i64),
+    Shutdown,
+}
+
+#[derive(Clone)]
+struct SongEntry {
+    id: i64,
+    label: String,
+    title: String,
+    detail: String,
+    duration: String,
+    search: String,
+}
+
+/// Clean artist/album subtitle: avoids redundant `"Artist · Artist"` or `"Artist · Singles"`.
+fn format_track_detail(artist: &str, album: &str) -> String {
+    let artist = artist.trim();
+    let album = album.trim();
+    if album.is_empty()
+        || album.eq_ignore_ascii_case("Singles")
+        || album.eq_ignore_ascii_case("Unknown album")
+        || album.eq_ignore_ascii_case(artist)
+    {
+        artist.to_owned()
+    } else {
+        format!("{artist} · {album}")
+    }
+}
+
 trait Transport: std::io::Read + std::io::Write {}
 impl<T: std::io::Read + std::io::Write> Transport for T {}
+
 enum Peer {
     Bluetooth(bluetooth::Peer),
     App(lan::Peer),
@@ -41,7 +76,20 @@ impl Peer {
             Self::App(p) => format!("app:{}:{}", p.address, p.fingerprint),
         }
     }
+    fn display(&self) -> (String, String) {
+        match self {
+            Self::Bluetooth(p) => (p.name.clone(), "Paired Bluetooth · RFCOMM".into()),
+            Self::App(p) => match p.name.split_once(" · ") {
+                Some((alias, addr)) => (
+                    alias.to_owned(),
+                    format!("{addr}:{} · TLS 1.3", p.address.port()),
+                ),
+                None => (p.name.clone(), format!("{} · TLS 1.3", p.address)),
+            },
+        }
+    }
 }
+
 fn show_peers(ui: &slint::Weak<AppWindow>, peers: &[Peer]) {
     let labels: Vec<slint::SharedString> = peers
         .iter()
@@ -50,25 +98,41 @@ fn show_peers(ui: &slint::Weak<AppWindow>, peers: &[Peer]) {
             Peer::App(p) => p.name.clone().into(),
         })
         .collect();
+    let items: Vec<ShareDevice> = peers
+        .iter()
+        .map(|p| {
+            let (name, detail) = p.display();
+            ShareDevice {
+                name: name.into(),
+                detail: detail.into(),
+            }
+        })
+        .collect();
     let ids: Vec<slint::SharedString> = peers.iter().map(|p| p.id().into()).collect();
     update(ui, move |u| {
         let previous = u.get_device_ids().row_data(u.get_device_index() as usize);
         let selected = previous
             .and_then(|id| ids.iter().position(|candidate| *candidate == id))
+            .or_else(|| (ids.len() == 1).then_some(0))
             .map(|i| i as i32)
             .unwrap_or(-1);
         u.set_device_ids(ModelRc::new(VecModel::from(ids)));
         u.set_devices(ModelRc::new(VecModel::from(labels)));
+        u.set_device_items(ModelRc::new(VecModel::from(items)));
         u.set_device_index(selected);
     });
 }
+
 /// A device that stops answering is dropped after this long, so one lost
 /// discovery round does not make it flicker out of the picker.
 const PEER_TTL: Duration = Duration::from_secs(15);
+const THUMB_CACHE_LIMIT: usize = 160;
+
 enum Server {
     Bluetooth(bluetooth::Listener),
     App(lan::Listener),
 }
+
 /// Our LAN listener, so scans keep answering others and skip ourselves.
 fn own_lan(listener: &Option<Server>) -> Option<&lan::Listener> {
     match listener {
@@ -76,11 +140,13 @@ fn own_lan(listener: &Option<Server>) -> Option<&lan::Listener> {
         _ => None,
     }
 }
+
 /// Explicit Bluetooth Receive mode. LAN visibility is implicit and keeps the
 /// song and device pickers usable.
 fn receiving(listener: &Option<Server>) -> bool {
     matches!(listener, Some(Server::Bluetooth(_)))
 }
+
 /// Wi-Fi mode is visible whenever the Share page is active on it, like the mobile
 /// Share hub: no separate Receive step. Returns a notice if binding failed.
 fn arm_lan(
@@ -94,18 +160,31 @@ fn arm_lan(
     match lan::Listener::bind(cancel.clone()) {
         Ok(server) => {
             let name = server.name.clone();
-            update(ui, move |u| u.set_receiving_name(name.into()));
+            let port = server.port();
+            let port_str = if port > 0 {
+                port.to_string()
+            } else {
+                String::new()
+            };
+            update(ui, move |u| {
+                u.set_receiving_name(name.into());
+                u.set_receiving_port(port_str.into());
+            });
             *listener = Some(Server::App(server));
             None
         }
         Err(e) => {
-            update(ui, |u| u.set_receiving_name("".into()));
+            update(ui, |u| {
+                u.set_receiving_name("".into());
+                u.set_receiving_port("".into());
+            });
             Some(format!(
                 "Other devices can't find this one right now ({e}). You can still send."
             ))
         }
     }
 }
+
 impl Server {
     fn accept(&self) -> Result<Option<(Box<dyn Transport>, String)>> {
         match self {
@@ -121,23 +200,145 @@ impl Server {
         }
     }
 }
-fn filter_songs(ui: &SharingState<'_>) {
+
+/// Strict case-insensitive alphabetical sort (Title A→Z, then Artist A→Z, then ID).
+pub(crate) fn sort_tracks_alphabetical(tracks: &mut [Track]) {
+    tracks.sort_by(|a, b| {
+        a.title
+            .trim()
+            .to_lowercase()
+            .cmp(&b.title.trim().to_lowercase())
+            .then_with(|| {
+                a.artist
+                    .trim()
+                    .to_lowercase()
+                    .cmp(&b.artist.trim().to_lowercase())
+            })
+            .then_with(|| a.id.cmp(&b.id))
+    });
+}
+
+fn sync_selected_preview(
+    ui: &SharingState<'_>,
+    entries: &[SongEntry],
+    thumb_tx: &mpsc::Sender<ThumbAction>,
+) {
+    let idx = ui.get_song_index();
+    let entry = usize::try_from(idx).ok().and_then(|i| entries.get(i));
+    if let Some(entry) = entry {
+        ui.set_selected_title(entry.title.clone().into());
+        ui.set_selected_detail(entry.detail.clone().into());
+        let _ = thumb_tx.send(ThumbAction::Select(entry.id));
+    } else {
+        ui.set_selected_title("".into());
+        ui.set_selected_detail("".into());
+        ui.set_selected_thumbnail(slint::Image::default());
+    }
+}
+
+fn apply_song_filter(
+    ui: &SharingState<'_>,
+    entries: &[SongEntry],
+    thumb_tx: &mpsc::Sender<ThumbAction>,
+) {
     let query = ui.get_song_query().trim().to_lowercase();
-    let songs = ui.get_songs();
-    let results = songs
+    let existing = ui.get_song_results();
+    let mut ui_thumbs: HashMap<i32, slint::Image> = HashMap::new();
+    for i in 0..existing.row_count() {
+        if let Some(row) = existing.row_data(i) {
+            if row.thumbnail.size().width > 0 {
+                ui_thumbs.insert(row.id, row.thumbnail);
+            }
+        }
+    }
+    let results = entries
         .iter()
         .enumerate()
-        .filter(|(_, label)| query.is_empty() || label.to_lowercase().contains(&query))
-        .map(|(index, label)| ShareSong {
-            label,
+        .filter(|(_, e)| query.is_empty() || e.search.contains(&query))
+        .map(|(index, e)| ShareSong {
             index: index as i32,
+            id: e.id as i32,
+            label: e.label.clone().into(),
+            title: e.title.clone().into(),
+            detail: e.detail.clone().into(),
+            duration: e.duration.clone().into(),
+            thumbnail: ui_thumbs.remove(&(e.id as i32)).unwrap_or_default(),
         })
         .collect::<Vec<_>>();
     let selected = ui.get_song_index();
     if !results.iter().any(|song| song.index == selected) {
-        ui.set_song_index(-1);
+        let next = results.first().map(|s| s.index).unwrap_or(-1);
+        ui.set_song_index(next);
     }
     ui.set_song_results(ModelRc::new(VecModel::from(results)));
+    sync_selected_preview(ui, entries, thumb_tx);
+}
+
+fn resolve_thumb(
+    id: i64,
+    paths: &HashMap<i64, String>,
+    cache: &mut VecDeque<(i64, Option<crate::controller::Art>)>,
+) -> Option<crate::controller::Art> {
+    if let Some(pos) = cache.iter().position(|(k, _)| *k == id) {
+        let (_, art) = cache.remove(pos).unwrap();
+        cache.push_back((id, art.clone()));
+        return art;
+    }
+    let path = paths.get(&id)?;
+    let art = crate::controller::row_cover(path);
+    cache.push_back((id, art.clone()));
+    if cache.len() > THUMB_CACHE_LIMIT {
+        cache.pop_front();
+    }
+    art
+}
+
+fn spawn_thumb_worker(weak: slint::Weak<AppWindow>) -> (mpsc::Sender<ThumbAction>, JoinHandle<()>) {
+    let (tx, rx) = mpsc::channel::<ThumbAction>();
+    let handle = std::thread::spawn(move || {
+        let mut paths: HashMap<i64, String> = HashMap::new();
+        let mut cache: VecDeque<(i64, Option<crate::controller::Art>)> = VecDeque::new();
+        let mut selected_id: Option<i64> = None;
+
+        while let Ok(msg) = rx.recv() {
+            match msg {
+                ThumbAction::Shutdown => break,
+                ThumbAction::Catalog(list) => {
+                    paths = list.into_iter().collect();
+                    cache.retain(|(id, _)| paths.contains_key(id));
+                }
+                ThumbAction::Select(id) => {
+                    selected_id = Some(id);
+                    let art = resolve_thumb(id, &paths, &mut cache);
+                    update(&weak, move |u| {
+                        let image = art.as_ref().map(|a| a.to_image()).unwrap_or_default();
+                        u.set_selected_thumbnail(image);
+                    });
+                }
+                ThumbAction::Request(id) => {
+                    let art = resolve_thumb(id, &paths, &mut cache);
+                    let also_selected = selected_id == Some(id);
+                    update(&weak, move |u| {
+                        let image = art.as_ref().map(|a| a.to_image()).unwrap_or_default();
+                        if also_selected {
+                            u.set_selected_thumbnail(image.clone());
+                        }
+                        let rows = u.get_song_results();
+                        for index in 0..rows.row_count() {
+                            let Some(mut row) = rows.row_data(index) else {
+                                continue;
+                            };
+                            if row.id as i64 == id {
+                                row.thumbnail = image.clone();
+                                rows.set_row_data(index, row);
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    });
+    (tx, handle)
 }
 
 fn refresh_action(app: &AppWindow, selected: Vec<i64>) -> Action {
@@ -148,23 +349,30 @@ fn refresh_action(app: &AppWindow, selected: Vec<i64>) -> Action {
         app.global::<SharingState>().get_method(),
     )
 }
+
 pub struct Sharing {
     tx: mpsc::Sender<Action>,
+    thumb_tx: mpsc::Sender<ThumbAction>,
     cancel: Arc<AtomicBool>,
     closed: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    thumb_worker: Option<JoinHandle<()>>,
 }
+
 fn update(ui: &slint::Weak<AppWindow>, f: impl FnOnce(SharingState<'_>) + Send + 'static) {
     let _ = ui.upgrade_in_event_loop(move |app| f(app.global::<SharingState>()));
 }
-fn state(ui: &slint::Weak<AppWindow>, text: String, busy: bool, listening: bool) {
+
+fn state(ui: &slint::Weak<AppWindow>, text: String, error: bool, busy: bool, listening: bool) {
     update(ui, move |u| {
         u.set_status(text.into());
+        u.set_status_error(error);
         u.set_busy(busy);
         u.set_listening(listening);
         u.set_incoming(false);
     });
 }
+
 fn progress(ui: slint::Weak<AppWindow>) -> impl FnMut(u64, u64) {
     let mut last = Instant::now() - Duration::from_secs(1);
     move |done, total| {
@@ -174,6 +382,7 @@ fn progress(ui: slint::Weak<AppWindow>) -> impl FnMut(u64, u64) {
         last = Instant::now();
         update(&ui, move |u| {
             u.set_progress(done as f32 / total as f32);
+            u.set_status_error(false);
             u.set_status(
                 format!(
                     "{:.1} / {:.1} MB · {}",
@@ -190,11 +399,15 @@ fn progress(ui: slint::Weak<AppWindow>) -> impl FnMut(u64, u64) {
         });
     }
 }
+
 impl Sharing {
     pub fn bind(app: &AppWindow, data: PathBuf, controller: mpsc::Sender<Command>) -> Self {
         let ui = app.global::<SharingState>();
+        ui.set_bluetooth_native(cfg!(windows));
         let (tx, rx) = mpsc::channel();
         let (decision_tx, decisions) = mpsc::channel();
+        let (thumb_tx, thumb_worker) = spawn_thumb_worker(app.as_weak());
+        let catalog: Rc<RefCell<Vec<SongEntry>>> = Rc::new(RefCell::new(Vec::new()));
         let cancel = Arc::new(AtomicBool::new(false));
         let running = Arc::new(AtomicBool::new(false));
         let closed = Arc::new(AtomicBool::new(true));
@@ -206,6 +419,17 @@ impl Sharing {
             closed.clone(),
             awaiting.clone(),
         );
+        let worker_thumbs = thumb_tx.clone();
+
+        let (cat_tx, cat_rx) = mpsc::channel::<Vec<SongEntry>>();
+        let catalog_drain = catalog.clone();
+        let drain_rc = Rc::new(move || {
+            while let Ok(entries) = cat_rx.try_recv() {
+                *catalog_drain.borrow_mut() = entries;
+            }
+        });
+
+        let worker_cat_tx = cat_tx.clone();
         let worker = std::thread::spawn(move || {
             let mut session = None;
             let mut listener: Option<Server> = None;
@@ -215,7 +439,6 @@ impl Sharing {
             let mut peers: Vec<Peer> = Vec::new();
             let mut last_seen: HashMap<String, Instant> = HashMap::new();
             let mut destination = PathBuf::new();
-            // Only explicit Bluetooth receiving expires; Wi-Fi lasts while the page is active.
             let mut listening_until: Option<Instant> = None;
             let mut next_discovery = Instant::now();
             loop {
@@ -230,8 +453,12 @@ impl Sharing {
                             "Receiving stopped. Choose Receive to start another session.".into(),
                             false,
                             false,
+                            false,
                         ),
-                        Some(Server::App(_)) => update(&weak, |u| u.set_receiving_name("".into())),
+                        Some(Server::App(_)) => update(&weak, |u| {
+                            u.set_receiving_name("".into());
+                            u.set_receiving_port("".into());
+                        }),
                         None => {}
                     }
                 }
@@ -265,12 +492,10 @@ impl Sharing {
                         listener = None;
                         listening_until = None;
                         if !worker_closed.load(Ordering::Relaxed) {
-                            // The cancelled work has finished (single worker), so let
-                            // Wi-Fi mode become visible again on the next idle tick.
                             worker_cancel.store(false, Ordering::Relaxed);
                             next_discovery = Instant::now();
                         }
-                        state(&weak, "Sharing cancelled.".into(), false, false);
+                        state(&weak, "Sharing cancelled.".into(), false, false, false);
                         continue;
                     }
                     if worker_closed.load(Ordering::Relaxed)
@@ -283,8 +508,7 @@ impl Sharing {
                     worker_running.store(true, Ordering::Release);
                     worker_cancel.store(false, Ordering::Relaxed);
                     let result: Result<String> = (|| match action {
-                        Action::Refresh(current, folder, selected, transport) => {
-                            // Keep an existing Wi-Fi listener so our address stays stable.
+                        Action::Refresh(_current, folder, selected, transport) => {
                             if !(transport == 1 && matches!(listener, Some(Server::App(_)))) {
                                 listener = None;
                                 listening_until = None;
@@ -297,15 +521,34 @@ impl Sharing {
                             destination = folder;
                             update(&weak, |u| {
                                 u.set_devices(ModelRc::default());
+                                u.set_device_items(ModelRc::default());
                                 u.set_device_ids(ModelRc::default());
                                 u.set_device_index(-1);
                                 u.set_available(false);
                             });
                             if method != 1 {
-                                update(&weak, |u| u.set_receiving_name("".into()));
+                                update(&weak, |u| {
+                                    u.set_receiving_name("".into());
+                                    u.set_receiving_port("".into());
+                                });
                             }
                             if method == 0 {
-                                songs.clear();
+                                songs = Library::open(&data.join("library.sqlite3"))?.tracks(0)?;
+                                if !selected.is_empty() {
+                                    songs.retain(|s| selected.contains(&s.id));
+                                } else {
+                                    songs.retain(|s| std::path::Path::new(&s.path).is_file());
+                                }
+                                sort_tracks_alphabetical(&mut songs);
+                                let batch_value = selected.len() > 1;
+                                let labels: Vec<slint::SharedString> = songs
+                                    .iter()
+                                    .map(|s| format!("{} · {}", s.title, s.artist).into())
+                                    .collect();
+                                update(&weak, move |u| {
+                                    u.set_batch(batch_value);
+                                    u.set_songs(ModelRc::new(VecModel::from(labels)));
+                                });
                                 return Ok(String::new());
                             }
                             songs = Library::open(&data.join("library.sqlite3"))?.tracks(0)?;
@@ -320,24 +563,44 @@ impl Sharing {
                                             .into(),
                                     );
                                 }
+                            } else {
+                                songs.retain(|s| std::path::Path::new(&s.path).is_file());
                             }
-                            let batch_value = batch;
-                            let labels: Vec<slint::SharedString> = songs
+                            sort_tracks_alphabetical(&mut songs);
+
+                            let _ = worker_thumbs.send(ThumbAction::Catalog(
+                                songs.iter().map(|s| (s.id, s.path.clone())).collect(),
+                            ));
+                            let entries: Vec<SongEntry> = songs
                                 .iter()
-                                .map(|s| format!("{} · {}", s.title, s.artist).into())
+                                .map(|s| {
+                                    let label = format!("{} · {}", s.title, s.artist);
+                                    let detail = format_track_detail(&s.artist, &s.album);
+                                    let raw = format!("{} {} {}", s.title, s.artist, s.album);
+                                    let search = raw.to_lowercase();
+                                    SongEntry {
+                                        id: s.id,
+                                        label,
+                                        title: s.title.clone(),
+                                        detail,
+                                        duration: library::clock(s.seconds),
+                                        search,
+                                    }
+                                })
                                 .collect();
-                            let selected = songs
-                                .iter()
-                                .position(|s| s.id == current)
-                                .or_else(|| (!songs.is_empty()).then_some(0))
-                                .map(|i| i as i32)
-                                .unwrap_or(-1);
+                            let _ = worker_cat_tx.send(entries.clone());
+                            let batch_value = batch;
+                            let labels: Vec<slint::SharedString> =
+                                entries.iter().map(|e| e.label.clone().into()).collect();
+                            let selected_idx = if songs.is_empty() { -1 } else { 0 };
+                            let ui_thumbs = worker_thumbs.clone();
                             update(&weak, move |u| {
                                 u.set_batch(batch_value);
                                 u.set_songs(ModelRc::new(VecModel::from(labels)));
-                                u.set_song_index(selected);
-                                filter_songs(&u);
+                                u.set_song_index(selected_idx);
+                                apply_song_filter(&u, &entries, &ui_thumbs);
                             });
+
                             let mut notice = None;
                             if method == 1 {
                                 notice = arm_lan(&mut listener, &worker_cancel, &weak);
@@ -367,12 +630,12 @@ impl Sharing {
                             });
                             let hint = match (method, peers.is_empty()) {
                                 (1, true) => {
-                                    "Looking for Monolith on this Wi-Fi… Open Share on the other device; it appears here automatically."
+                                    "Ready on Wi-Fi · Open Monolith → Share → Wi-Fi on your other device to connect automatically."
                                 }
                                 (1, false) => {
-                                    "Choose a device and send. The recipient approves each song."
+                                    "Choose a song and device, then send. The recipient approves each song."
                                 }
-                                _ => "Choose a paired device running Monolith, or Receive a song.",
+                                _ => "Choose a paired device running Monolith, or press Receive.",
                             };
                             Ok(match notice {
                                 Some(notice) => format!("{notice} {hint}"),
@@ -402,7 +665,6 @@ impl Sharing {
                             } else {
                                 vec![songs.get(song_index).ok_or("Choose a song.")?]
                             };
-                            // Preflight every file before sending the first song.
                             let offers: Vec<_> = selected
                                 .iter()
                                 .map(|s| {
@@ -420,8 +682,6 @@ impl Sharing {
                             let total = selected.len();
                             let mut saved = 0;
                             for (song, offer) in selected.into_iter().zip(offers) {
-                                // Read cover art per song (not in preflight) to cap memory
-                                // at one cover. Missing art never blocks the song.
                                 let path = std::path::Path::new(&song.path);
                                 let art = nearby::artwork_for(path);
                                 let offer = offer.with_artwork(art.as_deref());
@@ -443,6 +703,7 @@ impl Sharing {
                                     );
                                     update(&weak, move |u| {
                                         u.set_progress(0.);
+                                        u.set_status_error(false);
                                         u.set_status(note.into());
                                     });
                                     nearby::send_with_artwork(
@@ -461,28 +722,31 @@ impl Sharing {
                                 }
                                 saved += 1;
                             }
-                            Ok(format!(
-                                "{saved} songs received and added to the recipient's library."
-                            ))
+                            let msg = if saved == 1 {
+                                "1 song received and added to the recipient's library.".to_owned()
+                            } else {
+                                format!(
+                                    "{saved} songs received and added to the recipient's library."
+                                )
+                            };
+                            Ok(msg)
                         }
                         _ => unreachable!(),
                     })();
                     worker_running.store(false, Ordering::Release);
+                    let is_err = result.is_err();
                     state(
                         &weak,
                         result.unwrap_or_else(|e| e.to_string()),
+                        is_err,
                         false,
                         receiving(&listener),
                     );
-                }
-                // Keep the picker current without disabling buttons or changing song choices.
-                // Stable endpoint IDs prevent a disappearing/reordered device from rerouting Send.
-                else if method == 1
+                } else if method == 1
                     && !worker_cancel.load(Ordering::Relaxed)
                     && !worker_closed.load(Ordering::Relaxed)
                     && Instant::now() >= next_discovery
                 {
-                    // Re-arm after a cancel or failed bind; throttled to the scan interval.
                     let _ = arm_lan(&mut listener, &worker_cancel, &weak);
                     if let Ok(found) = lan::discover(&worker_cancel, own_lan(&listener)) {
                         let now = Instant::now();
@@ -505,13 +769,14 @@ impl Sharing {
                         Ok(None) => {}
                         Err(e) => {
                             listener = None;
-                            state(&weak, e.to_string(), false, false);
+                            state(&weak, e.to_string(), true, false, false);
                         }
                         Ok(Some((mut stream, peer))) => {
                             worker_running.store(true, Ordering::Release);
                             state(
                                 &weak,
                                 "Checking incoming Monolith offer…".into(),
+                                false,
                                 true,
                                 false,
                             );
@@ -522,10 +787,15 @@ impl Sharing {
                                 &worker_cancel,
                                 |offer| {
                                     worker_awaiting.store(true, Ordering::Release);
+                                    let art_note = if offer.artwork.is_some() {
+                                        " · with cover art"
+                                    } else {
+                                        ""
+                                    };
                                     let (title, detail) = (
                                         offer.title.clone(),
                                         format!(
-                                            "From {} · {:.1} MB · {}",
+                                            "From {} · {:.1} MB{art_note} · {}",
                                             peer,
                                             offer.size as f64 / 1_000_000.,
                                             offer.name
@@ -535,6 +805,7 @@ impl Sharing {
                                         u.set_incoming_title(title.into());
                                         u.set_incoming_detail(detail.into());
                                         u.set_incoming(true);
+                                        u.set_status_error(false);
                                         u.set_status("Accept or decline within 60 seconds.".into());
                                     });
                                     let until = Instant::now() + Duration::from_secs(60);
@@ -559,8 +830,8 @@ impl Sharing {
                                 },
                             );
                             worker_awaiting.store(false, Ordering::Release);
-                            // Keep the explicit five-minute session for the next individually approved song.
                             worker_running.store(false, Ordering::Release);
+                            let is_err = result.is_err();
                             state(
                                 &weak,
                                 result
@@ -571,6 +842,7 @@ impl Sharing {
                                         )
                                     })
                                     .unwrap_or_else(|e| e.to_string()),
+                                is_err,
                                 false,
                                 receiving(&listener),
                             );
@@ -581,6 +853,7 @@ impl Sharing {
             drop(listener);
             drop(session);
         });
+
         let start = |action: Action,
                      tx: &mpsc::Sender<Action>,
                      running: &AtomicBool,
@@ -588,61 +861,82 @@ impl Sharing {
             running.store(true, Ordering::Release);
             ui.set_busy(true);
             ui.set_progress(0.);
+            ui.set_status_error(false);
             ui.set_status("Preparing sharing.".into());
             if tx.send(action).is_err() {
                 running.store(false, Ordering::Release);
                 ui.set_busy(false);
+                ui.set_status_error(true);
                 ui.set_status("Sharing worker unavailable. Restart Monolith.".into());
             }
         };
+
         let selection = Rc::new(RefCell::new(Vec::new()));
-        let (weak, sender, active, is_closed, selected) = (
-            app.as_weak(),
-            tx.clone(),
-            running.clone(),
-            closed.clone(),
-            selection.clone(),
-        );
-        let filter_weak = app.as_weak();
-        ui.on_filter_songs(move || {
-            if let Some(app) = filter_weak.upgrade() {
-                filter_songs(&app.global::<SharingState>());
-            }
-        });
-        ui.on_open(move |use_selection| {
-            if let Some(app) = weak.upgrade() {
-                let ui = app.global::<SharingState>();
-                let ids = if use_selection {
-                    app.get_selected_ids().iter().map(i64::from).collect()
-                } else {
-                    Vec::new()
-                };
-                selected.replace(ids);
-                ui.set_destination(app.get_download_folder());
-                ui.set_method(0);
-                ui.set_song_query("".into());
-                ui.set_incoming(false);
-                ui.set_listening(false);
-                ui.set_receiving_name("".into());
-                is_closed.store(false, Ordering::Release);
-                start(
-                    refresh_action(&app, selected.borrow().clone()),
-                    &sender,
-                    &active,
-                    &ui,
-                );
-            }
-        });
-        let (weak, sender, active, selected) = (
-            app.as_weak(),
-            tx.clone(),
-            running.clone(),
-            selection.clone(),
-        );
-        ui.on_refresh(move || {
-            if let Some(app) = weak.upgrade() {
-                let ui = app.global::<SharingState>();
-                if !active.load(Ordering::Acquire) {
+
+        {
+            let tx = thumb_tx.clone();
+            ui.on_request_thumbnail(move |id| {
+                if id > 0 {
+                    let _ = tx.send(ThumbAction::Request(id as i64));
+                }
+            });
+        }
+
+        {
+            let weak = app.as_weak();
+            let cat = catalog.clone();
+            let drain = drain_rc.clone();
+            let t_tx = thumb_tx.clone();
+            ui.on_filter_songs(move || {
+                drain();
+                if let Some(app) = weak.upgrade() {
+                    let ui = app.global::<SharingState>();
+                    apply_song_filter(&ui, &cat.borrow(), &t_tx);
+                }
+            });
+        }
+
+        {
+            let weak = app.as_weak();
+            let cat = catalog.clone();
+            let drain = drain_rc.clone();
+            let t_tx = thumb_tx.clone();
+            ui.on_select_song(move |index| {
+                drain();
+                if let Some(app) = weak.upgrade() {
+                    let ui = app.global::<SharingState>();
+                    ui.set_song_index(index);
+                    sync_selected_preview(&ui, &cat.borrow(), &t_tx);
+                }
+            });
+        }
+
+        {
+            let (weak, sender, active, is_closed, selected) = (
+                app.as_weak(),
+                tx.clone(),
+                running.clone(),
+                closed.clone(),
+                selection.clone(),
+            );
+            ui.on_open(move |use_selection| {
+                if let Some(app) = weak.upgrade() {
+                    let ui = app.global::<SharingState>();
+                    let ids = if use_selection {
+                        app.get_selected_ids().iter().map(i64::from).collect()
+                    } else {
+                        Vec::new()
+                    };
+                    selected.replace(ids);
+                    ui.set_destination(app.get_download_folder());
+                    ui.set_method(0);
+                    ui.set_song_query("".into());
+                    ui.set_incoming(false);
+                    ui.set_listening(false);
+                    ui.set_receiving_name("".into());
+                    ui.set_receiving_port("".into());
+                    ui.set_status_error(false);
+                    is_closed.store(false, Ordering::Release);
                     start(
                         refresh_action(&app, selected.borrow().clone()),
                         &sender,
@@ -650,102 +944,196 @@ impl Sharing {
                         &ui,
                     );
                 }
-            }
-        });
-        let (weak, sender, active) = (app.as_weak(), tx.clone(), running.clone());
-        ui.on_choose_method(move |method| {
-            if let Some(app) = weak.upgrade() {
-                let ui = app.global::<SharingState>();
-                if !active.load(Ordering::Acquire) {
-                    ui.set_method(method);
-                    start(
-                        refresh_action(&app, selection.borrow().clone()),
-                        &sender,
-                        &active,
-                        &ui,
-                    );
+            });
+        }
+
+        {
+            let (weak, sender, active, selected) = (
+                app.as_weak(),
+                tx.clone(),
+                running.clone(),
+                selection.clone(),
+            );
+            ui.on_refresh(move || {
+                if let Some(app) = weak.upgrade() {
+                    let ui = app.global::<SharingState>();
+                    if !active.load(Ordering::Acquire) {
+                        start(
+                            refresh_action(&app, selected.borrow().clone()),
+                            &sender,
+                            &active,
+                            &ui,
+                        );
+                    }
                 }
-            }
-        });
-        let (nearby, sender, active) = (app.as_weak(), tx.clone(), running.clone());
-        ui.on_send_song(move |song, peer| {
-            if let Some(app) = nearby.upgrade() {
-                let ui = app.global::<SharingState>();
-                if song >= 0 && peer >= 0 && !active.load(Ordering::Acquire) {
-                    let Some(peer_id) = ui.get_device_ids().row_data(peer as usize) else {
-                        return;
-                    };
-                    start(
-                        Action::Send(song as usize, peer_id.to_string()),
-                        &sender,
-                        &active,
-                        &ui,
-                    );
+            });
+        }
+
+        {
+            let (weak, sender, active) = (app.as_weak(), tx.clone(), running.clone());
+            ui.on_choose_method(move |method| {
+                if let Some(app) = weak.upgrade() {
+                    let ui = app.global::<SharingState>();
+                    if !active.load(Ordering::Acquire) {
+                        ui.set_method(method);
+                        start(
+                            refresh_action(&app, selection.borrow().clone()),
+                            &sender,
+                            &active,
+                            &ui,
+                        );
+                    }
                 }
-            }
-        });
-        let (nearby, sender, active) = (app.as_weak(), tx.clone(), running.clone());
-        ui.on_receive_song(move || {
-            if let Some(app) = nearby.upgrade() {
-                let ui = app.global::<SharingState>();
-                if !active.load(Ordering::Acquire) {
-                    start(Action::Receive, &sender, &active, &ui);
+            });
+        }
+
+        {
+            let (nearby, sender, active) = (app.as_weak(), tx.clone(), running.clone());
+            ui.on_send_song(move |song, peer| {
+                if let Some(app) = nearby.upgrade() {
+                    let ui = app.global::<SharingState>();
+                    if song >= 0 && peer >= 0 && !active.load(Ordering::Acquire) {
+                        let Some(peer_id) = ui.get_device_ids().row_data(peer as usize) else {
+                            return;
+                        };
+                        start(
+                            Action::Send(song as usize, peer_id.to_string()),
+                            &sender,
+                            &active,
+                            &ui,
+                        );
+                    }
                 }
-            }
-        });
-        let (flag, nearby, sender, waiting) =
-            (cancel.clone(), app.as_weak(), tx.clone(), awaiting.clone());
-        ui.on_cancel(move || {
-            flag.store(true, Ordering::Relaxed);
-            waiting.store(false, Ordering::Release);
-            let _ = sender.send(Action::Stop);
-            if let Some(app) = nearby.upgrade() {
-                let ui = app.global::<SharingState>();
-                ui.set_incoming(false);
-                ui.set_status("Cancelling sharing…".into());
-            }
-        });
-        let waiting = awaiting.clone();
-        let nearby = app.as_weak();
-        ui.on_decide(move |yes| {
-            if waiting.swap(false, Ordering::AcqRel) {
-                let _ = decision_tx.send(yes);
+            });
+        }
+
+        {
+            let (nearby, sender, active) = (app.as_weak(), tx.clone(), running.clone());
+            ui.on_receive_song(move || {
+                if let Some(app) = nearby.upgrade() {
+                    let ui = app.global::<SharingState>();
+                    if !active.load(Ordering::Acquire) {
+                        start(Action::Receive, &sender, &active, &ui);
+                    }
+                }
+            });
+        }
+
+        {
+            let (flag, nearby, sender, waiting) =
+                (cancel.clone(), app.as_weak(), tx.clone(), awaiting.clone());
+            ui.on_cancel(move || {
+                flag.store(true, Ordering::Relaxed);
+                waiting.store(false, Ordering::Release);
+                let _ = sender.send(Action::Stop);
                 if let Some(app) = nearby.upgrade() {
                     let ui = app.global::<SharingState>();
                     ui.set_incoming(false);
-                    ui.set_status(
-                        if yes {
-                            "Receiving song…"
-                        } else {
-                            "Declining song…"
-                        }
-                        .into(),
-                    );
+                    ui.set_status_error(false);
+                    ui.set_status("Cancelling sharing…".into());
                 }
-            }
-        });
-        let (flag, is_closed, sender) = (cancel.clone(), closed.clone(), tx.clone());
-        ui.on_close(move || {
-            if !is_closed.swap(true, Ordering::AcqRel) {
-                flag.store(true, Ordering::Relaxed);
-                let _ = sender.send(Action::Close);
-            }
-        });
+            });
+        }
+
+        {
+            let waiting = awaiting.clone();
+            let nearby = app.as_weak();
+            ui.on_decide(move |yes| {
+                if waiting.swap(false, Ordering::AcqRel) {
+                    let _ = decision_tx.send(yes);
+                    if let Some(app) = nearby.upgrade() {
+                        let ui = app.global::<SharingState>();
+                        ui.set_incoming(false);
+                        ui.set_status_error(false);
+                        ui.set_status(
+                            if yes {
+                                "Receiving song…"
+                            } else {
+                                "Declining song…"
+                            }
+                            .into(),
+                        );
+                    }
+                }
+            });
+        }
+
+        {
+            let (flag, is_closed, sender) = (cancel.clone(), closed.clone(), tx.clone());
+            ui.on_close(move || {
+                if !is_closed.swap(true, Ordering::AcqRel) {
+                    flag.store(true, Ordering::Relaxed);
+                    let _ = sender.send(Action::Close);
+                }
+            });
+        }
+
         Self {
             tx,
+            thumb_tx,
             cancel,
             closed,
             worker: Some(worker),
+            thumb_worker: Some(thumb_worker),
         }
     }
 }
+
 impl Drop for Sharing {
     fn drop(&mut self) {
         self.closed.store(true, Ordering::Relaxed);
         self.cancel.store(true, Ordering::Relaxed);
         let _ = self.tx.send(Action::Shutdown);
+        let _ = self.thumb_tx.send(ThumbAction::Shutdown);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+        if let Some(thumb_worker) = self.thumb_worker.take() {
+            let _ = thumb_worker.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sorts_share_songs_alphabetically_and_deduplicates_detail() {
+        let mut tracks = vec![
+            Track {
+                id: 1,
+                path: "z.mp3".into(),
+                title: "zebra".into(),
+                artist: "B".into(),
+                album: "X".into(),
+                seconds: 10.,
+                favorite: false,
+            },
+            Track {
+                id: 2,
+                path: "a2.mp3".into(),
+                title: "  Alpha".into(),
+                artist: "Zed".into(),
+                album: "X".into(),
+                seconds: 10.,
+                favorite: false,
+            },
+            Track {
+                id: 3,
+                path: "a1.mp3".into(),
+                title: "alpha".into(),
+                artist: "amy".into(),
+                album: "X".into(),
+                seconds: 10.,
+                favorite: false,
+            },
+        ];
+        sort_tracks_alphabetical(&mut tracks);
+        let ids: Vec<i64> = tracks.iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec![3, 2, 1]);
+        assert_eq!(format_track_detail("T-Series", "T-Series"), "T-Series");
+        assert_eq!(format_track_detail("Sidhu", "Singles"), "Sidhu");
+        assert_eq!(format_track_detail("Artist", "Album"), "Artist · Album");
     }
 }

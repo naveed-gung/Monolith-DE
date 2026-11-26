@@ -168,11 +168,13 @@ Releases are public: the in-app updater reads the latest published GitHub releas
 The workflow skips all jobs if the repository is ever made private.
 
 The [desktop workflow](.github/workflows/desktop-build.yml) builds the Windows
-setup and the native Linux `.deb` on standard public runners for pull requests,
-manual dispatch, version tags and versioned `release/v*` branches. Pushes to `main`
-run nothing. A release branch creates its version tag, then both platforms attach
-their packages and checksums to a draft. It does not use Actions artifact storage.
-Publish the draft only after both jobs succeed and the packages are reviewed.
+setup on a standard public Windows runner for pull requests, manual dispatch,
+version tags and versioned `release/v*` branches, while accepting a locally built
+native Linux `.deb` directly on `release/v*` staging pushes. Pushes to `main`
+run nothing. A release branch creates its version tag on the clean source commit,
+attaches the prebuilt Linux `.deb` and checksums directly to a draft, and adds
+the CI-built Windows setup once compiled. It does not use Actions artifact storage.
+Publish the draft only after the packages are reviewed.
 
 Under [GitHub's current public-runner pricing](https://docs.github.com/en/billing/concepts/product-billing/github-actions),
 this setup uses free execution. Release assets are distributed separately from

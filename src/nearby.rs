@@ -119,23 +119,91 @@ fn valid_name(name: &str) -> bool {
             && stem.as_bytes()[3].is_ascii_digit())
         && library::supported(Path::new(name))
 }
+/// Produces a wire-valid portable basename for any supported local audio file,
+/// preserving already-valid names verbatim and sanitizing long Unicode or
+/// Linux-legal punctuation (`:`, `?`, `"`, `|`, etc.) so valid tracks never fail preflight.
+fn portable_offer_name(path: &Path) -> Result<String> {
+    if !library::supported(path) {
+        return Err("Invalid song filename.".into());
+    }
+    let raw = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Invalid song filename.")?;
+    if valid_name(raw) {
+        return Ok(raw.to_owned());
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .ok_or("Invalid song filename.")?
+        .to_ascii_lowercase();
+    let os_stem = path.file_stem().and_then(|s| s.to_str());
+    let stem_raw = os_stem.unwrap_or("track");
+    let cleaned: String = stem_raw
+        .chars()
+        .map(|c| {
+            if c.is_control() || ['/', '\\', ':', '*', '?', '"', '<', '>', '|'].contains(&c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let mut stem = cleaned.trim_matches(['.', ' ']).to_owned();
+    if stem.is_empty() {
+        stem = "track".to_owned();
+    }
+    let upper = stem.split('.').next().unwrap_or("").to_ascii_uppercase();
+    if ["CON", "PRN", "AUX", "NUL"].contains(&upper.as_str())
+        || (upper.len() == 4
+            && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper.as_bytes()[3].is_ascii_digit())
+    {
+        stem.insert_str(0, "track_");
+    }
+    let max_stem = 180usize.saturating_sub(ext.len() + 1);
+    if stem.len() > max_stem {
+        let mut end = max_stem;
+        while !stem.is_char_boundary(end) {
+            end -= 1;
+        }
+        stem.truncate(end);
+        stem = stem.trim_end_matches(['.', ' ']).to_owned();
+        if stem.is_empty() {
+            stem = "track".to_owned();
+        }
+    }
+    let candidate = format!("{stem}.{ext}");
+    if !valid_name(&candidate) {
+        return Err("Invalid song filename.".into());
+    }
+    Ok(candidate)
+}
 impl Offer {
     pub fn from_file(path: &Path, title: &str) -> Result<Self> {
         let size = path.metadata()?.len();
         if size == 0 || size > MAX_SONG_BYTES {
             return Err("Choose a song under 100 MB.".into());
         }
+        let name = portable_offer_name(path)?;
+        let clean_title: String = title
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(120)
+            .collect();
+        let clean_title = if clean_title.trim().is_empty() {
+            Path::new(&name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Track")
+                .to_owned()
+        } else {
+            clean_title
+        };
         let offer = Self {
-            name: path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .ok_or("Invalid song filename.")?
-                .into(),
-            title: title
-                .chars()
-                .filter(|c| !c.is_control())
-                .take(120)
-                .collect(),
+            name,
+            title: clean_title,
             size,
             sha256: updates::sha256(path)?,
             artwork: None,
@@ -361,10 +429,18 @@ pub fn receive(
         return Err("Song integrity check failed. Incomplete file discarded.".into());
     }
     // Probe content, not the extension, before publishing anything to the library.
-    lofty::probe::Probe::new(std::io::BufReader::new(File::open(staged.path())?))
-        .guess_file_type()?
-        .options(lofty::config::ParseOptions::new().read_cover_art(false))
-        .read()?;
+    // Trailing-moov or tagless M4A files from mobile can trip lofty while still
+    // decoding cleanly, matching Library::import.
+    let reader = std::io::BufReader::new(File::open(staged.path())?);
+    let opts = lofty::config::ParseOptions::new().read_cover_art(false);
+    let parsed = lofty::probe::Probe::new(reader)
+        .guess_file_type()
+        .ok()
+        .and_then(|p| p.options(opts).read().ok());
+    if parsed.is_none() {
+        rodio::Decoder::try_from(File::open(staged.path())?)
+            .map_err(|e| format!("Not a playable audio file: {e}"))?;
+    }
     check_cancel(cancel)?;
     let target = destination.join(&offer.name);
     staged.persist_noclobber(&target).map_err(|e| e.error)?;
@@ -410,6 +486,14 @@ mod tests {
             assert!(!valid_name(name));
         }
         assert!(valid_name("أغنية.flac"));
+        let dir = tempfile::tempdir().unwrap();
+        let long_unicode = format!("{}.mp3", "𝘼𝙡𝙖_𝙜𝙤𝙯𝙡𝙪𝙢_".repeat(6));
+        assert!(long_unicode.len() > 180);
+        let tricky = dir.path().join(&long_unicode);
+        std::fs::write(&tricky, audio()).unwrap();
+        let sanitized = Offer::from_file(&tricky, "").unwrap();
+        assert!(valid_name(&sanitized.name) && sanitized.name.len() <= 180);
+        assert!(!sanitized.title.is_empty());
         assert!(control_read(&mut Cursor::new((MAX_CONTROL as u32 + 1).to_be_bytes())).is_err());
         assert!(check_hello(json!({"type":"hello", "app":"other", "version":1})).is_err());
         assert!(Offer::parse(json!({"type":"offer", "name":"song.mp3", "title":"Song", "size":MAX_SONG_BYTES+1, "sha256":"a".repeat(64)})).is_err());

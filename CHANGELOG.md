@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.4
+
+- Redesigned Share hub and Wi-Fi/Bluetooth sub-pages with top-left back
+  navigation, transport tabs, responsive split/tiled/compact layouts, and a
+  persistent transfer dock.
+- Share song list now sorts strictly A–Z with off-thread cover-art thumbnails
+  and clean artist/album subtitles.
+- Nearby transfers sanitize long Unicode and punctuation filenames during
+  preflight, prefer LAN port `45882` with dynamic fallback, and verify received
+  trailing-moov/tagless M4A files with `rodio` decoder fallback.
+- Release workflow builds Windows setup in CI while accepting prebuilt Linux
+  `.deb` packages directly on release staging branches.
+
 ## 0.7.3
 
 - Share is a full page within the main window, with Wi-Fi and Bluetooth options,

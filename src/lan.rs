@@ -23,7 +23,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-const DISCOVERY_PORT: u16 = 45881;
+pub const DISCOVERY_PORT: u16 = 45881;
+pub const TRANSFER_PORT: u16 = 45882;
 const MAX_PEERS: usize = 32;
 fn local(ip: IpAddr) -> bool {
     matches!(ip, IpAddr::V4(ip) if ip.is_private() || ip.is_link_local() || ip.is_loopback())
@@ -224,7 +225,11 @@ pub struct Listener {
 }
 impl Listener {
     pub fn bind(cancel: Arc<AtomicBool>) -> Result<Self> {
-        Self::bind_at("0.0.0.0:0", true, cancel)
+        Self::bind_at(&format!("0.0.0.0:{TRANSFER_PORT}"), true, cancel.clone())
+            .or_else(|_| Self::bind_at("0.0.0.0:0", true, cancel))
+    }
+    pub fn port(&self) -> u16 {
+        self.tcp.local_addr().map(|a| a.port()).unwrap_or(0)
     }
     fn bind_at(address: &str, advertise: bool, cancel: Arc<AtomicBool>) -> Result<Self> {
         let certified = rcgen::generate_simple_self_signed(vec!["monolith.local".into()])?;

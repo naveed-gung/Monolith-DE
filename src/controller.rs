@@ -1135,6 +1135,10 @@ impl Art {
             height,
         }
     }
+    pub(crate) fn to_image(&self) -> slint::Image {
+        let px = slint::SharedPixelBuffer::clone_from_slice(&self.bytes, self.width, self.height);
+        slint::Image::from_rgba8(px)
+    }
 }
 
 /// Bakes a rounded-rect alpha mask into the artwork.
@@ -1220,7 +1224,7 @@ fn decode_cover(path: &str) -> Option<image::RgbaImage> {
     decode(&data)
 }
 
-fn row_cover(path: &str) -> Option<Art> {
+pub(crate) fn row_cover(path: &str) -> Option<Art> {
     let decoded = decode_cover(path)?;
     let span = decoded.width().min(decoded.height());
     let square = image::imageops::crop_imm(

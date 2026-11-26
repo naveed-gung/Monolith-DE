@@ -1,48 +1,964 @@
-import { LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { Button, ButtonKind, Card, Caption, SectionLabel, ProgressBar } from "controls.slint";
+import { NavGlyph } from "glyphs.slint";
+import { Button, ButtonKind, IconButton, Card, Caption, SectionLabel, ProgressBar, TextField } from "controls.slint";
 
-component Choice inherits Rectangle {
+export struct ShareSong {
+    index: int,
+    id: int,
+    label: string,
+    title: string,
+    detail: string,
+    duration: string,
+    thumbnail: image,
+}
+
+export struct ShareDevice {
+    name: string,
+    detail: string,
+}
+
+component PillBadge inherits Rectangle {
     in property <string> text;
-    in property <bool> selected;
+    in property <bool> accent: false;
+    height: 22px;
+    width: label.preferred-width + 16px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: Theme.radius-pill;
+    background: root.accent ? Theme.accent-soft : Theme.surface-strong;
+    border-width: 1px;
+    border-color: root.accent ? Theme.accent.with-alpha(0.38) : Theme.border;
+    label := Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        color: root.accent ? Theme.accent : Theme.secondary;
+        font-size: Theme.type-caption;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+}
+
+// Segmented mode tab button inside a pill container — compact, zero overflow.
+component ModeSegment inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> active;
     in property <bool> enabled: true;
     callback clicked;
-    height: 44px;
-    background: root.selected ? Theme.accent-soft : touch.has-hover && root.enabled ? Theme.hover : transparent;
-    border-radius: Theme.radius-control;
-    border-width: focus.has-focus ? 1px : 0px;
-    border-color: Theme.accent;
-    animate background { duration: Theme.fast; }
+
+    private property <bool> hot: touch.has-hover && root.enabled;
+    private property <bool> focus-visible;
+
+    height: 32px;
+    width: content.preferred-width;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: 7px;
+    background: root.active ? Theme.accent : root.hot ? Theme.hover : transparent;
+    border-width: root.focus-visible ? 1.5px : 0px;
+    border-color: Theme.foreground;
+    opacity: root.enabled ? 1 : 0.4;
+    animate background, opacity { duration: Theme.fast; }
+
     accessible-role: button;
+    accessible-label: "Switch to " + root.text;
+    accessible-checkable: true;
+    accessible-checked: root.active;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    forward-focus: focus;
+
+    content := HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 12px;
+        spacing: 6px;
+        alignment: center;
+        cross-axis-alignment: center;
+        Image {
+            width: 14px;
+            height: 14px;
+            source: root.icon;
+            colorize: root.active ? Theme.on-accent : root.hot ? Theme.foreground : Theme.secondary;
+            accessible-role: none;
+        }
+        Text {
+            text: root.text;
+            color: root.active ? Theme.on-accent : root.hot ? Theme.foreground : Theme.secondary;
+            font-size: Theme.type-label;
+            font-weight: root.active ? 600 : 500;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+    focus := FocusScope {
+        width: 0px;
+        enabled: root.enabled;
+        focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+        focus-lost(reason) => { root.focus-visible = false; }
+        key-pressed(event) => {
+            if event.text == " " || event.text == "\n" {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+}
+
+// Wrapped multi-line status banner so messages never truncate mid-sentence.
+component ShareNotice inherits Rectangle {
+    in property <string> text;
+    in property <bool> error: false;
+    vertical-stretch: 0;
+    min-height: 36px;
+    border-radius: Theme.radius-control;
+    background: root.error ? Theme.danger-soft : Theme.surface;
+    border-width: 1px;
+    border-color: root.error ? Theme.danger.with-alpha(0.32) : Theme.border;
+    accessible-role: AccessibleRole.text;
     accessible-label: root.text;
+    accessible-live-region: AccessibleLiveness.polite;
+
+    HorizontalLayout {
+        padding-top: 8px;
+        padding-bottom: 8px;
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+        Rectangle {
+            width: 7px;
+            height: 7px;
+            horizontal-stretch: 0;
+            vertical-stretch: 0;
+            border-radius: 3.5px;
+            background: root.error ? Theme.danger : Theme.accent;
+        }
+        Text {
+            min-width: 0px;
+            horizontal-stretch: 1;
+            text: root.text;
+            color: root.error ? Theme.danger : Theme.secondary;
+            font-size: Theme.type-label;
+            wrap: word-wrap;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+}
+
+component TransportCard inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <string> badge;
+    in property <string> pill-one;
+    in property <string> pill-two;
+    in property <string> pill-three;
+    in property <string> cta;
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> featured: false;
+    in property <bool> compact: false;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    private property <bool> hot: touch.has-hover && root.enabled;
+    private property <bool> down: touch.pressed && root.enabled;
+    private property <bool> focus-visible;
+
+    min-width: 0px;
+    horizontal-stretch: 1;
+    min-height: 188px;
+    border-radius: Theme.radius-panel;
+    clip: true;
+    background: root.featured
+        ? (root.down ? Theme.pressed : root.hot ? Theme.selected : Theme.hero)
+        : (root.down ? Theme.pressed : root.hot ? Theme.hover : Theme.surface);
+    border-width: root.focus-visible ? 2px : 1px;
+    border-color: root.focus-visible ? Theme.accent
+        : root.featured ? (root.hot ? Theme.accent : Theme.accent.with-alpha(0.42))
+        : (root.hot ? Theme.border-strong : Theme.border);
+    opacity: root.enabled ? 1 : 0.45;
+    animate background, border-color, opacity { duration: Theme.fast; }
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-description: root.subtitle;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    forward-focus: focus;
+
+    if root.featured: Rectangle {
+        x: parent.width - 220px;
+        y: -130px;
+        width: 340px;
+        height: 340px;
+        background: @radial-gradient(circle, Theme.accent.with-alpha(0.16) 0%, Theme.accent.with-alpha(0) 68%);
+    }
+
+    VerticalLayout {
+        padding: 18px;
+        spacing: 12px;
+        alignment: space-between;
+
+        VerticalLayout {
+            min-width: 0px;
+            spacing: 12px;
+            HorizontalLayout {
+                alignment: space-between;
+                cross-axis-alignment: center;
+                spacing: 8px;
+                Rectangle {
+                    width: 42px;
+                    height: 42px;
+                    horizontal-stretch: 0;
+                    border-radius: 11px;
+                    background: root.featured ? Theme.accent : Theme.surface-strong;
+                    border-width: root.featured ? 0px : 1px;
+                    border-color: Theme.border;
+                    Image {
+                        x: 10px;
+                        y: 10px;
+                        width: 22px;
+                        height: 22px;
+                        source: root.icon;
+                        colorize: root.featured ? Theme.on-accent : Theme.foreground;
+                        accessible-role: none;
+                    }
+                }
+                PillBadge {
+                    text: root.badge;
+                    accent: root.featured;
+                }
+            }
+
+            VerticalLayout {
+                min-width: 0px;
+                spacing: 5px;
+                Text {
+                    min-width: 0px;
+                    text: root.title;
+                    color: Theme.foreground;
+                    font-size: Theme.type-title;
+                    font-weight: 700;
+                    overflow: elide;
+                    accessible-role: none;
+                }
+                Text {
+                    min-width: 0px;
+                    text: root.subtitle;
+                    color: Theme.secondary;
+                    font-size: Theme.type-label;
+                    wrap: word-wrap;
+                    accessible-role: none;
+                }
+            }
+        }
+
+        VerticalLayout {
+            min-width: 0px;
+            spacing: 10px;
+            HorizontalLayout {
+                alignment: start;
+                spacing: 6px;
+                PillBadge { text: root.pill-one; }
+                PillBadge { text: root.pill-two; }
+                if !root.compact: PillBadge { text: root.pill-three; }
+            }
+            Text {
+                min-width: 0px;
+                text: root.cta;
+                color: root.featured || root.hot ? Theme.accent : Theme.foreground;
+                font-size: Theme.type-body;
+                font-weight: 600;
+                overflow: elide;
+                animate color { duration: Theme.fast; }
+                accessible-role: none;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+    focus := FocusScope {
+        width: 0px;
+        enabled: root.enabled;
+        focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+        focus-lost(reason) => { root.focus-visible = false; }
+        key-pressed(event) => {
+            if event.text == " " || event.text == "\n" {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+}
+
+component StepTile inherits Card {
+    in property <string> step;
+    in property <string> title;
+    in property <string> body;
+    min-width: 0px;
+    horizontal-stretch: 1;
+    VerticalLayout {
+        min-width: 0px;
+        padding: 14px;
+        spacing: 4px;
+        SectionLabel { text: root.step; color: Theme.accent; }
+        Text {
+            min-width: 0px;
+            text: root.title;
+            color: Theme.foreground;
+            font-size: Theme.type-body;
+            font-weight: 600;
+            wrap: word-wrap;
+        }
+        Caption { min-width: 0px; text: root.body; }
+    }
+}
+
+component ShareSongRow inherits Rectangle {
+    in property <ShareSong> song;
+    in property <bool> selected;
+    in property <bool> enabled: true;
+    in property <bool> compact: false;
+    callback clicked;
+    callback request-thumbnail(int);
+
+    private property <int> art-id: root.song.id;
+    init => { if root.art-id > 0 { root.request-thumbnail(root.art-id); } }
+    changed art-id => { if root.art-id > 0 { root.request-thumbnail(root.art-id); } }
+
+    private property <bool> hot: touch.has-hover && root.enabled;
+    private property <bool> focus-visible;
+    height: 56px;
+    forward-focus: focus;
+
+    accessible-role: button;
+    accessible-label: root.song.label;
+    accessible-description: root.song.detail;
     accessible-enabled: root.enabled;
     accessible-checkable: true;
     accessible-checked: root.selected;
     accessible-action-default => { if root.enabled { root.clicked(); } }
-    forward-focus: focus;
-    Text { x: 12px; width: parent.width - 24px; text: root.text; color: root.selected ? Theme.accent : Theme.foreground; overflow: elide; vertical-alignment: center; }
-    touch := TouchArea { enabled: root.enabled; clicked => { focus.focus(); root.clicked(); } }
+
+    Rectangle {
+        x: 2px;
+        y: 2px;
+        width: max(0px, parent.width - 4px);
+        height: parent.height - 4px;
+        border-radius: Theme.radius-control;
+        background: root.selected
+            ? (root.hot ? Theme.row-selected-hover : Theme.accent-soft)
+            : (root.hot ? Theme.row-hover : transparent);
+        border-width: root.focus-visible ? 2px : root.selected ? 1px : 0px;
+        border-color: root.focus-visible ? Theme.accent : Theme.accent.with-alpha(0.45);
+        animate background, border-color { duration: Theme.fast; }
+
+        Rectangle {
+            x: 0px;
+            y: 12px;
+            width: 3px;
+            height: root.selected ? 28px : 0px;
+            border-radius: 1.5px;
+            background: Theme.accent;
+            animate height { duration: Theme.fast; }
+        }
+
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 12px;
+            spacing: 12px;
+            cross-axis-alignment: center;
+
+            Rectangle {
+                width: 40px;
+                height: 40px;
+                vertical-stretch: 0;
+                horizontal-stretch: 0;
+                border-radius: 8px;
+                background: root.selected ? Theme.selected : Theme.raised;
+                accessible-role: none;
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.song.thumbnail;
+                    image-fit: ImageFit.cover;
+                    accessible-role: none;
+                }
+                if root.song.thumbnail.width == 0: NavGlyph {
+                    x: 10px;
+                    y: 10px;
+                    width: 20px;
+                    height: 20px;
+                    kind: 1;
+                    tint: root.selected ? Theme.accent : Theme.secondary;
+                    accessible-role: none;
+                }
+                Rectangle {
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: root.selected ? Theme.accent.with-alpha(0.5) : Theme.border;
+                }
+            }
+
+            VerticalLayout {
+                min-width: 0px;
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    min-width: 0px;
+                    text: root.song.title;
+                    color: Theme.foreground;
+                    font-size: Theme.type-body;
+                    font-weight: root.selected ? 600 : 500;
+                    overflow: elide;
+                    accessible-role: none;
+                }
+                Text {
+                    min-width: 0px;
+                    text: root.song.detail;
+                    color: root.selected || root.hot ? Theme.secondary : Theme.muted;
+                    font-size: Theme.type-label;
+                    overflow: elide;
+                    accessible-role: none;
+                }
+            }
+
+            if !root.compact && root.song.duration != "": Text {
+                text: root.song.duration;
+                width: 40px;
+                horizontal-stretch: 0;
+                color: root.selected ? Theme.secondary : Theme.muted;
+                font-size: Theme.type-label;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                horizontal-stretch: 0;
+                border-radius: 10px;
+                background: root.selected ? Theme.accent : transparent;
+                border-width: root.selected ? 0px : 1.5px;
+                border-color: root.hot ? Theme.secondary : Theme.border-strong;
+                animate background, border-color { duration: Theme.fast; }
+                if root.selected: Image {
+                    x: 3px;
+                    y: 3px;
+                    width: 14px;
+                    height: 14px;
+                    source: @image-url("icons/check.svg");
+                    colorize: Theme.on-accent;
+                    accessible-role: none;
+                }
+            }
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { focus.focus(); root.clicked(); }
+    }
     focus := FocusScope {
-        width: 0px; enabled: root.enabled;
-        key-pressed(event) => { if event.text == " " || event.text == "\n" { root.clicked(); return accept; } return reject; }
+        width: 0px;
+        enabled: root.enabled;
+        focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+        focus-lost(reason) => { root.focus-visible = false; }
+        key-pressed(event) => {
+            if event.text == " " || event.text == "\n" {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
     }
 }
 
-export struct ShareSong { label: string, index: int }
+component ShareDeviceRow inherits Rectangle {
+    in property <ShareDevice> device;
+    in property <bool> wifi: true;
+    in property <bool> selected;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    private property <bool> hot: touch.has-hover && root.enabled;
+    private property <bool> focus-visible;
+    height: 54px;
+    forward-focus: focus;
+
+    accessible-role: button;
+    accessible-label: root.device.name;
+    accessible-description: root.device.detail;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+
+    Rectangle {
+        x: 2px;
+        y: 2px;
+        width: max(0px, parent.width - 4px);
+        height: parent.height - 4px;
+        border-radius: Theme.radius-control;
+        background: root.selected
+            ? (root.hot ? Theme.row-selected-hover : Theme.accent-soft)
+            : (root.hot ? Theme.row-hover : transparent);
+        border-width: root.focus-visible ? 2px : root.selected ? 1px : 0px;
+        border-color: root.focus-visible ? Theme.accent : Theme.accent.with-alpha(0.45);
+        animate background, border-color { duration: Theme.fast; }
+
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 12px;
+            spacing: 10px;
+            cross-axis-alignment: center;
+
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                horizontal-stretch: 0;
+                border-radius: 9px;
+                background: root.selected ? Theme.accent : Theme.surface-strong;
+                border-width: root.selected ? 0px : 1px;
+                border-color: Theme.border;
+                Image {
+                    x: 9px;
+                    y: 9px;
+                    width: 18px;
+                    height: 18px;
+                    source: root.wifi ? @image-url("icons/wifi.svg") : @image-url("icons/bluetooth.svg");
+                    colorize: root.selected ? Theme.on-accent : Theme.foreground;
+                    accessible-role: none;
+                }
+            }
+
+            VerticalLayout {
+                min-width: 0px;
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    min-width: 0px;
+                    text: root.device.name;
+                    color: Theme.foreground;
+                    font-size: Theme.type-body;
+                    font-weight: root.selected ? 600 : 500;
+                    overflow: elide;
+                    accessible-role: none;
+                }
+                if root.device.detail != "": Text {
+                    min-width: 0px;
+                    text: root.device.detail;
+                    color: root.selected || root.hot ? Theme.secondary : Theme.muted;
+                    font-size: Theme.type-label;
+                    overflow: elide;
+                    accessible-role: none;
+                }
+            }
+
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                horizontal-stretch: 0;
+                border-radius: 10px;
+                background: root.selected ? Theme.accent : transparent;
+                border-width: root.selected ? 0px : 1.5px;
+                border-color: root.hot ? Theme.secondary : Theme.border-strong;
+                if root.selected: Image {
+                    x: 3px;
+                    y: 3px;
+                    width: 14px;
+                    height: 14px;
+                    source: @image-url("icons/check.svg");
+                    colorize: Theme.on-accent;
+                    accessible-role: none;
+                }
+            }
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+    focus := FocusScope {
+        width: 0px;
+        enabled: root.enabled;
+        focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+        focus-lost(reason) => { root.focus-visible = false; }
+        key-pressed(event) => {
+            if event.text == " " || event.text == "\n" {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+}
+
+component SongsPickerCard inherits Card {
+    in property <bool> compact: false;
+    min-width: 0px;
+    VerticalLayout {
+        min-width: 0px;
+        padding: 12px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            alignment: space-between;
+            cross-axis-alignment: center;
+            spacing: 8px;
+            SectionLabel {
+                text: SharingState.batch ? "SELECTED SONGS · A–Z" : "CHOOSE A SONG · A–Z";
+            }
+            PillBadge {
+                text: SharingState.batch ? "\{SharingState.songs.length} locked"
+                    : SharingState.song-query != "" ? "\{SharingState.song-results.length} of \{SharingState.songs.length}"
+                    : "\{SharingState.songs.length} tracks";
+                accent: SharingState.song-query != "";
+            }
+        }
+
+        if SharingState.batch: Caption {
+            min-width: 0px;
+            text: "\{SharingState.songs.length} selected songs. Change this selection in Library or Songs.";
+        }
+
+        if !SharingState.batch && SharingState.songs.length > 0: HorizontalLayout {
+            spacing: 6px;
+            cross-axis-alignment: center;
+            TextField {
+                min-width: 0px;
+                horizontal-stretch: 1;
+                text <=> SharingState.song-query;
+                placeholder: "Filter A–Z by title, artist, or album…";
+                label: "Find a song to share";
+                icon: @image-url("icons/search.svg");
+                enabled: !SharingState.busy;
+                edited => { SharingState.filter-songs(); }
+            }
+            if SharingState.song-query != "": IconButton {
+                size: 36px;
+                icon-size: 16px;
+                icon: @image-url("icons/x.svg");
+                label: "Clear song filter";
+                enabled: !SharingState.busy;
+                clicked => {
+                    SharingState.song-query = "";
+                    SharingState.filter-songs();
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            min-height: 112px;
+            border-radius: Theme.radius-control;
+            background: Theme.stage;
+            border-width: 1px;
+            border-color: Theme.border;
+            clip: true;
+
+            if SharingState.song-results.length > 0: ListView {
+                x: 4px;
+                y: 4px;
+                width: max(0px, parent.width - 8px);
+                height: max(0px, parent.height - 8px);
+                for song in SharingState.song-results: ShareSongRow {
+                    song: song;
+                    compact: root.compact;
+                    selected: SharingState.batch || SharingState.song-index == song.index;
+                    enabled: !SharingState.batch && !SharingState.busy;
+                    request-thumbnail(id) => { SharingState.request-thumbnail(id); }
+                    clicked => { SharingState.select-song(song.index); }
+                }
+            }
+
+            if SharingState.song-results.length == 0: VerticalLayout {
+                alignment: center;
+                padding: 16px;
+                spacing: 4px;
+                Text {
+                    text: SharingState.songs.length == 0 ? "No songs in your library yet" : "No matching songs";
+                    color: Theme.foreground;
+                    font-size: Theme.type-body;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                }
+                Caption {
+                    text: SharingState.songs.length == 0 ? "Import audio in Library or download a track first." : "Try another title, artist, or album keyword.";
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+component DevicesPickerCard inherits Card {
+    in property <bool> compact: false;
+    min-width: 0px;
+    VerticalLayout {
+        min-width: 0px;
+        padding: 12px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            alignment: space-between;
+            cross-axis-alignment: center;
+            spacing: 8px;
+            SectionLabel {
+                text: SharingState.method == 1 ? "NEARBY MONOLITH DEVICES" : "PAIRED DEVICES";
+            }
+            PillBadge {
+                text: SharingState.method == 2 && !SharingState.bluetooth-native ? "Windows only"
+                    : SharingState.device-items.length > 0 ? "\{SharingState.device-items.length} ready"
+                    : SharingState.method == 1 ? "Scanning" : "0 paired";
+                accent: SharingState.device-items.length > 0;
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            min-height: 76px;
+            border-radius: Theme.radius-control;
+            background: Theme.stage;
+            border-width: 1px;
+            border-color: Theme.border;
+            clip: true;
+
+            if SharingState.device-items.length > 0: ListView {
+                x: 4px;
+                y: 4px;
+                width: max(0px, parent.width - 8px);
+                height: max(0px, parent.height - 8px);
+                for device[index] in SharingState.device-items: ShareDeviceRow {
+                    device: device;
+                    wifi: SharingState.method == 1;
+                    selected: SharingState.device-index == index;
+                    enabled: !SharingState.busy && !SharingState.listening;
+                    clicked => { SharingState.device-index = index; }
+                }
+            }
+
+            // Linux Bluetooth clean redirect state instead of a confusing empty box
+            if SharingState.device-items.length == 0 && SharingState.method == 2 && !SharingState.bluetooth-native: HorizontalLayout {
+                padding: 12px;
+                spacing: 12px;
+                cross-axis-alignment: center;
+                VerticalLayout {
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 3px;
+                    Text {
+                        min-width: 0px;
+                        text: "Bluetooth RFCOMM isn't available on Linux yet";
+                        color: Theme.foreground;
+                        font-size: Theme.type-body;
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+                    Caption {
+                        min-width: 0px;
+                        text: "Use Wi-Fi Sharing to send & receive songs with Android, iOS, Windows, and Linux.";
+                    }
+                }
+                Button {
+                    text: "Use Wi-Fi";
+                    label: "Switch to Wi-Fi sharing";
+                    kind: ButtonKind.primary;
+                    icon: @image-url("icons/wifi.svg");
+                    icon-only: root.compact;
+                    enabled: !SharingState.busy;
+                    clicked => { SharingState.choose-method(1); }
+                }
+            }
+
+            if SharingState.device-items.length == 0 && !(SharingState.method == 2 && !SharingState.bluetooth-native): VerticalLayout {
+                alignment: center;
+                padding: 14px;
+                spacing: 4px;
+                Text {
+                    min-width: 0px;
+                    text: SharingState.method == 1 ? "Looking for Monolith on this network…" : "No paired Bluetooth devices";
+                    color: Theme.foreground;
+                    font-size: Theme.type-body;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+                Caption {
+                    min-width: 0px;
+                    text: SharingState.method == 1
+                        ? "Open Monolith → Share → Wi-Fi on your phone or PC on the same Wi-Fi."
+                        : "Pair your device in system Bluetooth settings, then press Refresh.";
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+component TransferDockCard inherits Card {
+    in property <string> target-name;
+    in property <bool> compact: false;
+    min-width: 0px;
+    vertical-stretch: 0;
+
+    VerticalLayout {
+        min-width: 0px;
+        padding: 12px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            spacing: 10px;
+            cross-axis-alignment: center;
+
+            Rectangle {
+                width: 42px;
+                height: 42px;
+                horizontal-stretch: 0;
+                vertical-stretch: 0;
+                border-radius: 8px;
+                background: Theme.raised;
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: SharingState.selected-thumbnail;
+                    image-fit: ImageFit.cover;
+                    accessible-role: none;
+                }
+                if SharingState.selected-thumbnail.width == 0: NavGlyph {
+                    x: 11px;
+                    y: 11px;
+                    width: 20px;
+                    height: 20px;
+                    kind: 1;
+                    tint: Theme.accent;
+                    accessible-role: none;
+                }
+                Rectangle {
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                }
+            }
+
+            VerticalLayout {
+                min-width: 0px;
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    min-width: 0px;
+                    text: SharingState.batch ? "\{SharingState.songs.length} selected songs queued"
+                        : SharingState.selected-title != "" ? SharingState.selected-title
+                        : "Select a song above";
+                    color: Theme.foreground;
+                    font-size: Theme.type-body;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+                Text {
+                    min-width: 0px;
+                    text: root.target-name != "" ? "Recipient: " + root.target-name
+                        : SharingState.selected-detail != "" ? SharingState.selected-detail + " · Pick a device"
+                        : "Pick a recipient device";
+                    color: root.target-name != "" ? Theme.accent : Theme.muted;
+                    font-size: Theme.type-label;
+                    overflow: elide;
+                }
+            }
+
+            if !root.compact: HorizontalLayout {
+                spacing: 8px;
+                cross-axis-alignment: center;
+                if !SharingState.busy && !SharingState.listening: Button {
+                    text: SharingState.batch ? "Send selected songs" : "Send song";
+                    kind: ButtonKind.primary;
+                    icon: @image-url("icons/share.svg");
+                    enabled: SharingState.available && SharingState.song-index >= 0 && SharingState.device-index >= 0;
+                    clicked => { SharingState.send-song(SharingState.song-index, SharingState.device-index); }
+                }
+                if SharingState.method == 2 && !SharingState.busy && !SharingState.listening: Button {
+                    text: "Receive";
+                    enabled: SharingState.available;
+                    clicked => { SharingState.receive-song(); }
+                }
+                if SharingState.busy || SharingState.listening: Button {
+                    text: "Cancel";
+                    clicked => { SharingState.cancel(); }
+                }
+            }
+        }
+
+        if SharingState.progress > 0 && SharingState.busy: ProgressBar {
+            progress: SharingState.progress;
+        }
+
+        if root.compact: HorizontalLayout {
+            spacing: 8px;
+            if !SharingState.busy && !SharingState.listening: Button {
+                text: SharingState.batch ? "Send selected songs" : "Send song";
+                kind: ButtonKind.primary;
+                icon: @image-url("icons/share.svg");
+                enabled: SharingState.available && SharingState.song-index >= 0 && SharingState.device-index >= 0;
+                clicked => { SharingState.send-song(SharingState.song-index, SharingState.device-index); }
+            }
+            if SharingState.method == 2 && !SharingState.busy && !SharingState.listening: Button {
+                text: "Receive";
+                enabled: SharingState.available;
+                clicked => { SharingState.receive-song(); }
+            }
+            if SharingState.busy || SharingState.listening: Button {
+                text: "Cancel";
+                clicked => { SharingState.cancel(); }
+            }
+        }
+    }
+}
 
 export global SharingState {
     in-out property <[string]> songs;
     in-out property <[ShareSong]> song-results;
     in-out property <string> song-query;
     callback filter-songs;
+    callback select-song(int);
+    callback request-thumbnail(int);
+    in-out property <string> selected-title;
+    in-out property <string> selected-detail;
+    in-out property <image> selected-thumbnail;
     in-out property <[string]> devices;
+    in-out property <[ShareDevice]> device-items;
     in-out property <[string]> device-ids;
     in-out property <int> song-index: -1;
     in-out property <int> device-index: -1;
     in-out property <bool> available;
+    in-out property <bool> bluetooth-native: true;
     in-out property <int> method: 0;
     in-out property <bool> batch;
     in-out property <string> receiving-name;
+    in-out property <string> receiving-port;
     callback choose-method(int);
     in-out property <bool> busy;
     in-out property <bool> listening;
@@ -50,6 +966,7 @@ export global SharingState {
     in-out property <string> incoming-title;
     in-out property <string> incoming-detail;
     in-out property <string> status;
+    in-out property <bool> status-error;
     in-out property <float> progress;
     in-out property <string> destination;
     callback refresh;
@@ -61,115 +978,531 @@ export global SharingState {
     callback close;
 }
 
-export component SharePage inherits Rectangle {
+export component SharePage inherits FocusScope {
+    // Stage width breakpoints (sidebar is already subtracted by AppShell):
+    // - Half-screen tiled 1920x1080 with expanded sidebar -> width ~ 635px, height ~ 910px
+    // - Fullscreen / wide window -> width >= 740px
+    // - Minimum window -> width ~ 340px, height ~ 250px
+    private property <bool> cards-side-by-side: root.width >= 560px;
+    private property <bool> split-columns: root.width >= 760px && root.height >= 500px;
+    private property <bool> tall-workspace: root.height >= 540px;
+    private property <bool> compact: root.width < 520px;
+    private property <bool> short: root.height < 500px;
+    private property <string> selected-device-name: SharingState.device-index >= 0 && SharingState.device-index < SharingState.device-items.length
+        ? SharingState.device-items[SharingState.device-index].name : "";
+
+    key-pressed(event) => {
+        if event.text == Key.Escape && SharingState.method > 0 && !SharingState.busy && !SharingState.listening {
+            SharingState.choose-method(0);
+            return accept;
+        }
+        return reject;
+    }
+
     VerticalLayout {
-        spacing: 14px;
+        spacing: root.short ? 8px : 12px;
+
+        // ── Unbreakable Top Navigation Header ────────────────────────────────
+        // Left: Back button ALWAYS first on sub-pages so it can never clip off-screen!
+        // Center: Title + single-line elided subtitle (min-width: 0px prevents overflow).
+        // Right: Segmented mode switcher + Refresh.
         HorizontalLayout {
+            min-height: 44px;
             vertical-stretch: 0;
-            cross-axis-alignment: center; spacing: 12px;
+            cross-axis-alignment: center;
+            spacing: 10px;
+
+            if SharingState.method > 0: Button {
+                text: "← Back";
+                label: "Change sharing method";
+                enabled: !SharingState.busy && !SharingState.listening;
+                clicked => { SharingState.choose-method(0); }
+            }
+
+            VerticalLayout {
+                min-width: 0px;
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+                HorizontalLayout {
+                    min-width: 0px;
+                    spacing: 8px;
+                    cross-axis-alignment: center;
+                    Text {
+                        min-width: 0px;
+                        horizontal-stretch: 1;
+                        text: SharingState.method == 1 ? "Wi-Fi Sharing"
+                            : SharingState.method == 2 ? "Bluetooth Sharing"
+                            : "Share Music";
+                        color: Theme.foreground;
+                        font-size: SharingState.method == 0 && !root.compact ? Theme.type-display : Theme.type-title;
+                        font-weight: 700;
+                        overflow: elide;
+                    }
+                }
+                if SharingState.method == 0 && !root.short: Text {
+                    min-width: 0px;
+                    text: "Direct encrypted transfer between your devices — local, lossless, zero cloud.";
+                    color: Theme.secondary;
+                    font-size: Theme.type-label;
+                    overflow: elide;
+                }
+            }
+
+            if SharingState.method > 0: HorizontalLayout {
+                horizontal-stretch: 0;
+                spacing: 8px;
+                cross-axis-alignment: center;
+
+                if !root.compact: Rectangle {
+                    height: 38px;
+                    width: seg.preferred-width;
+                    border-radius: Theme.radius-control;
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    seg := HorizontalLayout {
+                        padding: 3px;
+                        spacing: 2px;
+                        cross-axis-alignment: center;
+                        ModeSegment {
+                            text: "Wi-Fi";
+                            icon: @image-url("icons/wifi.svg");
+                            active: SharingState.method == 1;
+                            enabled: !SharingState.busy && !SharingState.listening;
+                            clicked => { if SharingState.method != 1 { SharingState.choose-method(1); } }
+                        }
+                        ModeSegment {
+                            text: "Bluetooth";
+                            icon: @image-url("icons/bluetooth.svg");
+                            active: SharingState.method == 2;
+                            enabled: !SharingState.busy && !SharingState.listening;
+                            clicked => { if SharingState.method != 2 { SharingState.choose-method(2); } }
+                        }
+                    }
+                }
+
+                Button {
+                    text: "Refresh";
+                    label: "Refresh nearby devices and songs";
+                    icon: @image-url("icons/repeat.svg");
+                    icon-only: root.width < 660px;
+                    enabled: !SharingState.busy && !SharingState.listening;
+                    clicked => { SharingState.refresh(); }
+                }
+            }
+        }
+
+        // ── Sub-Page 0: Share Hub (Transport Chooser & Guide) ────────────────
+        if SharingState.method == 0: ScrollView {
+            vertical-stretch: 1;
+            vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
             VerticalLayout {
                 horizontal-stretch: 1;
-                Text { text: "Share music"; color: Theme.foreground; font-size: root.width < 400px ? Theme.type-title : Theme.type-display; font-weight: 700; }
-                if SharingState.method > 0: Caption { text: SharingState.method == 1 ? "Wi-Fi sharing" : "Bluetooth sharing"; }
-            }
-            if SharingState.method > 0: Button { text: "Back"; label: "Change sharing method"; enabled: !SharingState.busy && !SharingState.listening; clicked => { SharingState.choose-method(0); } }
-            if SharingState.method > 0: Button { text: "Refresh"; label: "Refresh nearby devices and songs"; enabled: !SharingState.busy && !SharingState.listening; clicked => { SharingState.refresh(); } }
-        }
-        ScrollView {
-            vertical-stretch: 1;
-            VerticalLayout {
-                alignment: start; padding: 4px; spacing: 14px;
-                if SharingState.method == 0: HorizontalLayout {
-                    alignment: start;
-                    spacing: 8px;
-                    Button {
-                        text: "Wi-Fi"; label: "Use Wi-Fi";
+                alignment: start;
+                padding: 2px;
+                spacing: 14px;
+
+                if SharingState.batch && SharingState.songs.length > 0: Card {
+                    background: Theme.hero;
+                    border-color: Theme.accent.with-alpha(0.38);
+                    HorizontalLayout {
+                        padding: 14px;
+                        spacing: 12px;
+                        cross-axis-alignment: center;
+                        Rectangle {
+                            width: 36px;
+                            height: 36px;
+                            horizontal-stretch: 0;
+                            border-radius: 9px;
+                            background: Theme.accent-soft;
+                            Image {
+                                x: 9px; y: 9px; width: 18px; height: 18px;
+                                source: @image-url("icons/music.svg");
+                                colorize: Theme.accent;
+                                accessible-role: none;
+                            }
+                        }
+                        VerticalLayout {
+                            min-width: 0px;
+                            horizontal-stretch: 1;
+                            spacing: 2px;
+                            Text {
+                                min-width: 0px;
+                                text: "\{SharingState.songs.length} selected songs ready to send";
+                                color: Theme.foreground;
+                                font-size: Theme.type-body;
+                                font-weight: 600;
+                                overflow: elide;
+                            }
+                            Caption { min-width: 0px; text: "Pick Wi-Fi or Bluetooth below to send this selection."; }
+                        }
+                    }
+                }
+
+                if root.cards-side-by-side: HorizontalLayout {
+                    spacing: 14px;
+                    TransportCard {
+                        title: "Wi-Fi & Ethernet";
+                        subtitle: "Share with Monolith on Android, iOS, Windows, and Linux on the same local network. Automatically visible while open — includes cover art.";
+                        badge: "RECOMMENDED";
+                        pill-one: "TLS 1.3";
+                        pill-two: "Send & Receive";
+                        pill-three: "Cover Art";
+                        cta: "Open Wi-Fi Sharing →";
+                        label: "Use Wi-Fi";
                         icon: @image-url("icons/wifi.svg");
+                        featured: true;
+                        compact: root.width < 680px;
                         enabled: !SharingState.busy;
                         clicked => { SharingState.choose-method(1); }
                     }
-                    Button {
-                        text: "Bluetooth"; label: "Use Bluetooth";
+                    TransportCard {
+                        title: "Bluetooth Nearby";
+                        subtitle: SharingState.bluetooth-native
+                            ? "Direct authenticated RFCOMM transfer between OS-paired devices when no Wi-Fi network is available."
+                            : "Authenticated RFCOMM transfer (Windows native; on Linux, use Wi-Fi Sharing for full support).";
+                        badge: SharingState.bluetooth-native ? "OFFLINE" : "WINDOWS";
+                        pill-one: "Paired Only";
+                        pill-two: "5-Min Receive";
+                        pill-three: "RFCOMM";
+                        cta: "Open Bluetooth Sharing →";
+                        label: "Use Bluetooth";
                         icon: @image-url("icons/bluetooth.svg");
+                        featured: false;
+                        compact: root.width < 680px;
                         enabled: !SharingState.busy;
                         clicked => { SharingState.choose-method(2); }
                     }
                 }
-                if SharingState.method == 1 && SharingState.receiving-name != "" && !SharingState.incoming: Card {
-                    VerticalLayout {
-                        padding: 14px; spacing: 6px;
-                        SectionLabel { text: "VISIBLE AS"; }
-                        Text { text: SharingState.receiving-name; color: Theme.foreground; font-size: Theme.type-heading; font-weight: 600; wrap: word-wrap; }
-                        Caption { text: "Ready to receive on this network."; }
-                    }
-                }
-                if SharingState.method > 0 && !SharingState.incoming && !SharingState.listening: VerticalLayout {
-                    spacing: 8px;
-                    SectionLabel { text: SharingState.batch ? "SELECTED SONGS" : "CHOOSE A SONG"; }
-                    if !SharingState.batch && SharingState.songs.length > 0: LineEdit {
-                        text <=> SharingState.song-query;
-                        placeholder-text: "Find a song by title or artist";
-                        accessible-label: "Find a song to share";
+
+                if !root.cards-side-by-side: VerticalLayout {
+                    spacing: 12px;
+                    TransportCard {
+                        title: "Wi-Fi & Ethernet";
+                        subtitle: "Share with Monolith on Android, iOS, Windows, and Linux on the same network. Automatically visible while open.";
+                        badge: "RECOMMENDED";
+                        pill-one: "TLS 1.3";
+                        pill-two: "Send & Receive";
+                        pill-three: "Cover Art";
+                        cta: "Open Wi-Fi Sharing →";
+                        label: "Use Wi-Fi";
+                        icon: @image-url("icons/wifi.svg");
+                        featured: true;
+                        compact: root.compact;
                         enabled: !SharingState.busy;
-                        edited => { SharingState.filter-songs(); }
+                        clicked => { SharingState.choose-method(1); }
                     }
-                    if SharingState.batch: Caption { text: "\{SharingState.songs.length} selected songs. Change this selection in Library or Songs."; }
-                    Card {
-                        height: SharingState.song-results.length > 0 ? 144px : 58px;
-                        ListView {
-                            x: 6px; y: 6px; width: parent.width - 12px; height: parent.height - 12px;
-                            for song in SharingState.song-results: Choice {
-                                text: song.label;
-                                selected: SharingState.batch || SharingState.song-index == song.index;
-                                enabled: !SharingState.batch && !SharingState.busy;
-                                clicked => { SharingState.song-index = song.index; }
-                            }
-                        }
-                        if SharingState.song-results.length == 0: Text { x: 12px; width: parent.width - 24px; text: SharingState.songs.length == 0 ? "No songs available to share." : "No matching songs."; color: Theme.muted; vertical-alignment: center; }
-                    }
-                    SectionLabel { text: SharingState.method == 1 ? "NEARBY MONOLITH DEVICES" : "PAIRED DEVICES"; }
-                    Card {
-                        height: SharingState.devices.length > 0 ? 100px : 64px;
-                        ListView {
-                            x: 6px; y: 6px; width: parent.width - 12px; height: parent.height - 12px;
-                            for device[index] in SharingState.devices: Choice {
-                                text: device; selected: SharingState.device-index == index; enabled: !SharingState.busy && !SharingState.listening;
-                                clicked => { SharingState.device-index = index; }
-                            }
-                        }
-                        if SharingState.devices.length == 0: Text { x: 12px; width: parent.width - 24px; text: SharingState.method == 1 ? "Searching this Wi-Fi… Open Share on the other device." : "No paired devices available."; color: Theme.muted; vertical-alignment: center; wrap: word-wrap; }
+                    TransportCard {
+                        title: "Bluetooth Nearby";
+                        subtitle: SharingState.bluetooth-native
+                            ? "Authenticated RFCOMM transfer between OS-paired devices without Wi-Fi."
+                            : "Authenticated RFCOMM transfer (Windows native; use Wi-Fi on Linux).";
+                        badge: SharingState.bluetooth-native ? "OFFLINE" : "WINDOWS";
+                        pill-one: "Paired Only";
+                        pill-two: "5-Min Receive";
+                        pill-three: "RFCOMM";
+                        cta: "Open Bluetooth Sharing →";
+                        label: "Use Bluetooth";
+                        icon: @image-url("icons/bluetooth.svg");
+                        featured: false;
+                        compact: root.compact;
+                        enabled: !SharingState.busy;
+                        clicked => { SharingState.choose-method(2); }
                     }
                 }
-                if SharingState.incoming: Card {
-                    VerticalLayout {
-                        padding: 16px; spacing: 12px;
-                        SectionLabel { text: "INCOMING SONG"; color: Theme.accent; }
-                        Text { text: SharingState.incoming-title; color: Theme.foreground; font-size: Theme.type-heading; font-weight: 600; wrap: word-wrap; }
-                        Caption { text: SharingState.incoming-detail; }
-                        Caption { text: "Accept saves this song and adds it to your library. Existing files stay intact."; }
-                        HorizontalLayout {
-                            spacing: 8px;
-                            Button { text: "Decline"; clicked => { SharingState.decide(false); } }
-                            Button { text: "Accept song"; kind: ButtonKind.primary; clicked => { SharingState.decide(true); } }
+
+                if !root.short: VerticalLayout {
+                    spacing: 8px;
+                    SectionLabel { text: "HOW SHARING WORKS"; }
+                    if root.cards-side-by-side: HorizontalLayout {
+                        spacing: 12px;
+                        StepTile {
+                            step: "01 · CONNECT";
+                            title: "Open Share on both devices";
+                            body: "Wi-Fi peers appear automatically on the same network; Bluetooth uses OS pairing.";
+                        }
+                        StepTile {
+                            step: "02 · PICK A–Z";
+                            title: "Choose songs with cover art";
+                            body: "Browse your library sorted A–Z with thumbnails, or pre-select tracks in Library.";
+                        }
+                        StepTile {
+                            step: "03 · APPROVE";
+                            title: "Verified direct save";
+                            body: "Recipient approves each offer; SHA-256 + cover art verify before joining Library.";
+                        }
+                    }
+                    if !root.cards-side-by-side: StepTile {
+                        step: "HOW IT WORKS";
+                        title: "Open Share on both devices · Pick song(s) · Recipient approves";
+                        body: "Every transfer verifies SHA-256 integrity, preserves cover art, and never overwrites existing files.";
+                    }
+                }
+
+                if SharingState.destination != "": Card {
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 10px;
+                        cross-axis-alignment: center;
+                        Image {
+                            width: 16px;
+                            height: 16px;
+                            horizontal-stretch: 0;
+                            source: @image-url("icons/folder.svg");
+                            colorize: Theme.muted;
+                            accessible-role: none;
+                        }
+                        Caption {
+                            min-width: 0px;
+                            horizontal-stretch: 1;
+                            text: "Incoming songs save to: " + SharingState.destination;
                         }
                     }
                 }
-                if SharingState.method > 0: Caption { text: "Received songs: " + SharingState.destination; }
             }
         }
-        if SharingState.progress > 0 && SharingState.busy: ProgressBar { progress: SharingState.progress; }
-        if SharingState.status != "": Caption { text: SharingState.status; accessible-live-region: polite; }
-        HorizontalLayout {
-            height: SharingState.method > 0 || SharingState.busy ? 40px : 0px;
-            vertical-stretch: 0;
-            spacing: 8px;
-            if SharingState.method > 0 && !SharingState.busy && !SharingState.listening && !SharingState.incoming: Button {
-                text: SharingState.batch ? "Send selected songs" : "Send song"; kind: ButtonKind.primary;
-                enabled: SharingState.available && SharingState.song-index >= 0 && SharingState.device-index >= 0;
-                clicked => { SharingState.send-song(SharingState.song-index, SharingState.device-index); }
+
+        // ── Sub-Pages 1 & 2: Wi-Fi & Bluetooth Workspaces ────────────────────
+        if SharingState.method > 0: VerticalLayout {
+            vertical-stretch: 1;
+            spacing: root.short ? 8px : 10px;
+
+            // Live Presence Strip (Wi-Fi)
+            if SharingState.method == 1 && !SharingState.incoming: Card {
+                vertical-stretch: 0;
+                background: SharingState.receiving-name != "" ? Theme.surface : Theme.surface-strong;
+                HorizontalLayout {
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 12px;
+                    cross-axis-alignment: center;
+                    Rectangle {
+                        width: 10px;
+                        height: 10px;
+                        horizontal-stretch: 0;
+                        border-radius: 5px;
+                        background: SharingState.receiving-name != "" ? Theme.success : Theme.warning;
+                    }
+                    VerticalLayout {
+                        min-width: 0px;
+                        horizontal-stretch: 1;
+                        spacing: 1px;
+                        SectionLabel { text: "VISIBLE ON THIS NETWORK AS"; }
+                        Text {
+                            min-width: 0px;
+                            text: SharingState.receiving-name != "" ? SharingState.receiving-name : "Starting local listener…";
+                            color: Theme.foreground;
+                            font-size: Theme.type-heading;
+                            font-weight: 700;
+                            overflow: elide;
+                        }
+                    }
+                    if !root.compact: PillBadge {
+                        text: SharingState.receiving-port != "" ? "TLS 1.3 · :" + SharingState.receiving-port : "TLS 1.3 · Ready";
+                        accent: SharingState.receiving-name != "";
+                    }
+                }
             }
-            if SharingState.method == 2 && !SharingState.busy && !SharingState.listening: Button { text: "Receive"; enabled: SharingState.available; clicked => { SharingState.receive-song(); } }
-            if SharingState.busy || SharingState.listening: Button { text: "Cancel"; clicked => { SharingState.cancel(); } }
+
+            // Bluetooth Active Receive Window Card
+            if SharingState.method == 2 && SharingState.listening && !SharingState.incoming: Card {
+                vertical-stretch: 1;
+                background: Theme.hero;
+                border-color: Theme.accent.with-alpha(0.45);
+                VerticalLayout {
+                    padding: 24px;
+                    spacing: 14px;
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: 14px;
+                        cross-axis-alignment: center;
+                        Rectangle {
+                            width: 46px;
+                            height: 46px;
+                            horizontal-stretch: 0;
+                            border-radius: 12px;
+                            background: Theme.accent;
+                            Image {
+                                x: 13px; y: 13px; width: 20px; height: 20px;
+                                source: @image-url("icons/bluetooth.svg");
+                                colorize: Theme.on-accent;
+                                accessible-role: none;
+                            }
+                        }
+                        VerticalLayout {
+                            min-width: 0px;
+                            horizontal-stretch: 1;
+                            spacing: 3px;
+                            SectionLabel { text: "RECEIVING OVER BLUETOOTH"; color: Theme.accent; }
+                            Text {
+                                min-width: 0px;
+                                text: "Listening for incoming songs (5-minute window)";
+                                color: Theme.foreground;
+                                font-size: Theme.type-heading;
+                                font-weight: 600;
+                                wrap: word-wrap;
+                            }
+                            Caption { min-width: 0px; text: "Each offered song asks for your approval before anything is saved."; }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        Button {
+                            text: "Cancel";
+                            clicked => { SharingState.cancel(); }
+                        }
+                    }
+                }
+            }
+
+            // Incoming Song Approval Hero Card
+            if SharingState.incoming: Card {
+                vertical-stretch: 1;
+                background: Theme.hero;
+                border-color: Theme.accent;
+                VerticalLayout {
+                    padding: root.compact ? 18px : 26px;
+                    spacing: 14px;
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: 14px;
+                        cross-axis-alignment: center;
+                        Rectangle {
+                            width: 50px;
+                            height: 50px;
+                            horizontal-stretch: 0;
+                            border-radius: 12px;
+                            background: Theme.accent;
+                            Image {
+                                x: 13px; y: 13px; width: 24px; height: 24px;
+                                source: @image-url("icons/download.svg");
+                                colorize: Theme.on-accent;
+                                accessible-role: none;
+                            }
+                        }
+                        VerticalLayout {
+                            min-width: 0px;
+                            horizontal-stretch: 1;
+                            spacing: 3px;
+                            SectionLabel { text: "INCOMING SONG OFFER"; color: Theme.accent; }
+                            Text {
+                                min-width: 0px;
+                                text: SharingState.incoming-title;
+                                color: Theme.foreground;
+                                font-size: Theme.type-title;
+                                font-weight: 700;
+                                wrap: word-wrap;
+                            }
+                            Caption { min-width: 0px; text: SharingState.incoming-detail; }
+                        }
+                    }
+                    Caption {
+                        min-width: 0px;
+                        text: "Accept verifies SHA-256 integrity, saves to " + SharingState.destination + ", and adds to your library without overwriting existing files.";
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: 10px;
+                        Button {
+                            text: "Decline";
+                            clicked => { SharingState.decide(false); }
+                        }
+                        Button {
+                            text: "Accept song";
+                            kind: ButtonKind.primary;
+                            icon: @image-url("icons/check.svg");
+                            clicked => { SharingState.decide(true); }
+                        }
+                    }
+                }
+            }
+
+            // Layout A: Wide 2-Column Split (fullscreen / wide windows >= 760px stage)
+            if !SharingState.incoming && !SharingState.listening && root.split-columns: HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 12px;
+
+                SongsPickerCard {
+                    horizontal-stretch: 3;
+                    vertical-stretch: 1;
+                }
+
+                VerticalLayout {
+                    min-width: 0px;
+                    horizontal-stretch: 2;
+                    vertical-stretch: 1;
+                    spacing: 10px;
+
+                    DevicesPickerCard {
+                        vertical-stretch: 1;
+                        compact: true;
+                    }
+
+                    TransferDockCard {
+                        target-name: root.selected-device-name;
+                        compact: true;
+                    }
+                }
+            }
+
+            // Layout B: Half-Screen Tiled / Tall Single-Column Flex (fills 100% height, ZERO dead void!)
+            if !SharingState.incoming && !SharingState.listening && !root.split-columns && root.tall-workspace: VerticalLayout {
+                vertical-stretch: 1;
+                spacing: 10px;
+
+                SongsPickerCard {
+                    vertical-stretch: 3;
+                    compact: root.compact;
+                }
+
+                DevicesPickerCard {
+                    vertical-stretch: 1;
+                    max-height: SharingState.device-items.length > 0 ? 190px : 132px;
+                    compact: root.compact;
+                }
+
+                TransferDockCard {
+                    target-name: root.selected-device-name;
+                    compact: root.compact;
+                }
+            }
+
+            // Layout C: Ultra-Short / Minimum Window Scrollable Stack (< 540px stage height)
+            if !SharingState.incoming && !SharingState.listening && !root.split-columns && !root.tall-workspace: ScrollView {
+                vertical-stretch: 1;
+                vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: start;
+                    padding: 2px;
+                    spacing: 10px;
+
+                    SongsPickerCard {
+                        height: SharingState.song-results.length > 0 ? 220px : 120px;
+                        compact: root.compact;
+                    }
+
+                    DevicesPickerCard {
+                        height: SharingState.device-items.length > 0 ? 150px : 116px;
+                        compact: root.compact;
+                    }
+
+                    TransferDockCard {
+                        target-name: root.selected-device-name;
+                        compact: root.compact;
+                    }
+                }
+            }
+
+            if SharingState.status != "": ShareNotice {
+                text: SharingState.status;
+                error: SharingState.status-error;
+            }
         }
     }
 }
