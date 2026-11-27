@@ -183,7 +183,17 @@ fn run() -> Result<()> {
     app.set_reduce_motion(!native::animations_enabled());
     let (tx, rx) = mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
-    let worker = controller::spawn(db, app.as_weak(), rx, tx.clone(), cancel.clone());
+    let snapshot = Arc::new(std::sync::Mutex::new(controller::PlaybackSnapshot::default()));
+    let worker = controller::spawn(
+        db,
+        app.as_weak(),
+        rx,
+        tx.clone(),
+        cancel.clone(),
+        snapshot.clone(),
+    );
+    #[cfg(unix)]
+    let unix_ipc = native::UnixIpc::bind(&app, tx.clone(), snapshot);
     let sharing = nearby_ui::Sharing::bind(&app, data.clone(), tx.clone());
     let _tool_installer = tool_ui::Tools::bind(&app, tx.clone());
     {
@@ -587,6 +597,8 @@ fn run() -> Result<()> {
     let outcome = slint::run_event_loop_until_quit();
     #[cfg(windows)]
     drop(integration);
+    #[cfg(unix)]
+    drop(unix_ipc);
     cancel.store(true, Ordering::Relaxed);
     drop(sharing);
     let _ = tx.send(Command::Shutdown);

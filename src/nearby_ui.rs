@@ -9,7 +9,7 @@ use monolith_desktop::{
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
     cell::RefCell,
-    collections::{HashMap, VecDeque},
+    collections::{BTreeSet, HashMap, VecDeque},
     path::PathBuf,
     rc::Rc,
     sync::{
@@ -21,9 +21,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+const MAX_SHARE_BATCH: usize = 100;
+
 enum Action {
-    Refresh(i64, PathBuf, Vec<i64>, i32),
-    Send(usize, String),
+    Refresh(PathBuf, i32),
+    Send(Vec<i64>, String),
     Receive,
     Stop,
     Close,
@@ -221,26 +223,64 @@ pub(crate) fn sort_tracks_alphabetical(tracks: &mut [Track]) {
 fn sync_selected_preview(
     ui: &SharingState<'_>,
     entries: &[SongEntry],
+    selected: &BTreeSet<i64>,
     thumb_tx: &mpsc::Sender<ThumbAction>,
 ) {
-    let idx = ui.get_song_index();
-    let entry = usize::try_from(idx).ok().and_then(|i| entries.get(i));
-    if let Some(entry) = entry {
+    let rows = ui.get_song_results();
+    let row_count = rows.row_count();
+    let all_filtered =
+        row_count > 0 && (0..row_count).all(|i| rows.row_data(i).is_some_and(|r| r.checked));
+    ui.set_selected_count(selected.len() as i32);
+    ui.set_batch(selected.len() > 1);
+    ui.set_all_filtered_selected(all_filtered);
+
+    let lead = entries
+        .iter()
+        .enumerate()
+        .find(|(_, e)| selected.contains(&e.id));
+    if let Some((idx, entry)) = lead {
+        ui.set_song_index(idx as i32);
         ui.set_selected_title(entry.title.clone().into());
         ui.set_selected_detail(entry.detail.clone().into());
         let _ = thumb_tx.send(ThumbAction::Select(entry.id));
     } else {
+        ui.set_song_index(-1);
         ui.set_selected_title("".into());
         ui.set_selected_detail("".into());
         ui.set_selected_thumbnail(slint::Image::default());
     }
 }
 
+fn update_rows_checked_in_place(
+    ui: &SharingState<'_>,
+    entries: &[SongEntry],
+    selected: &BTreeSet<i64>,
+    thumb_tx: &mpsc::Sender<ThumbAction>,
+) {
+    let rows = ui.get_song_results();
+    for index in 0..rows.row_count() {
+        let Some(mut row) = rows.row_data(index) else {
+            continue;
+        };
+        let checked = selected.contains(&(row.id as i64));
+        if row.checked != checked {
+            row.checked = checked;
+            rows.set_row_data(index, row);
+        }
+    }
+    sync_selected_preview(ui, entries, selected, thumb_tx);
+}
+
 fn apply_song_filter(
     ui: &SharingState<'_>,
     entries: &[SongEntry],
+    selected: &mut BTreeSet<i64>,
     thumb_tx: &mpsc::Sender<ThumbAction>,
 ) {
+    if !entries.is_empty() {
+        let valid: BTreeSet<i64> = entries.iter().map(|e| e.id).collect();
+        selected.retain(|id| valid.contains(id));
+    }
     let query = ui.get_song_query().trim().to_lowercase();
     let existing = ui.get_song_results();
     let mut ui_thumbs: HashMap<i32, slint::Image> = HashMap::new();
@@ -263,15 +303,11 @@ fn apply_song_filter(
             detail: e.detail.clone().into(),
             duration: e.duration.clone().into(),
             thumbnail: ui_thumbs.remove(&(e.id as i32)).unwrap_or_default(),
+            checked: selected.contains(&e.id),
         })
         .collect::<Vec<_>>();
-    let selected = ui.get_song_index();
-    if !results.iter().any(|song| song.index == selected) {
-        let next = results.first().map(|s| s.index).unwrap_or(-1);
-        ui.set_song_index(next);
-    }
     ui.set_song_results(ModelRc::new(VecModel::from(results)));
-    sync_selected_preview(ui, entries, thumb_tx);
+    sync_selected_preview(ui, entries, selected, thumb_tx);
 }
 
 fn resolve_thumb(
@@ -341,11 +377,9 @@ fn spawn_thumb_worker(weak: slint::Weak<AppWindow>) -> (mpsc::Sender<ThumbAction
     (tx, handle)
 }
 
-fn refresh_action(app: &AppWindow, selected: Vec<i64>) -> Action {
+fn refresh_action(app: &AppWindow) -> Action {
     Action::Refresh(
-        app.get_current_id() as i64,
         PathBuf::from(app.get_download_folder().as_str()),
-        selected,
         app.global::<SharingState>().get_method(),
     )
 }
@@ -408,6 +442,7 @@ impl Sharing {
         let (decision_tx, decisions) = mpsc::channel();
         let (thumb_tx, thumb_worker) = spawn_thumb_worker(app.as_weak());
         let catalog: Rc<RefCell<Vec<SongEntry>>> = Rc::new(RefCell::new(Vec::new()));
+        let selected_ids: Rc<RefCell<BTreeSet<i64>>> = Rc::new(RefCell::new(BTreeSet::new()));
         let cancel = Arc::new(AtomicBool::new(false));
         let running = Arc::new(AtomicBool::new(false));
         let closed = Arc::new(AtomicBool::new(true));
@@ -430,11 +465,13 @@ impl Sharing {
         });
 
         let worker_cat_tx = cat_tx.clone();
+        let ui_cat_sync = catalog.clone();
+        let ui_sel_sync = selected_ids.clone();
+        let ui_drain_sync = drain_rc.clone();
         let worker = std::thread::spawn(move || {
             let mut session = None;
             let mut listener: Option<Server> = None;
             let mut method = 0;
-            let mut batch = false;
             let mut songs: Vec<Track> = Vec::new();
             let mut peers: Vec<Peer> = Vec::new();
             let mut last_seen: HashMap<String, Instant> = HashMap::new();
@@ -508,7 +545,7 @@ impl Sharing {
                     worker_running.store(true, Ordering::Release);
                     worker_cancel.store(false, Ordering::Relaxed);
                     let result: Result<String> = (|| match action {
-                        Action::Refresh(_current, folder, selected, transport) => {
+                        Action::Refresh(folder, transport) => {
                             if !(transport == 1 && matches!(listener, Some(Server::App(_)))) {
                                 listener = None;
                                 listening_until = None;
@@ -517,7 +554,6 @@ impl Sharing {
                             peers.clear();
                             last_seen.clear();
                             method = transport;
-                            batch = selected.len() > 1;
                             destination = folder;
                             update(&weak, |u| {
                                 u.set_devices(ModelRc::default());
@@ -532,40 +568,9 @@ impl Sharing {
                                     u.set_receiving_port("".into());
                                 });
                             }
-                            if method == 0 {
-                                songs = Library::open(&data.join("library.sqlite3"))?.tracks(0)?;
-                                if !selected.is_empty() {
-                                    songs.retain(|s| selected.contains(&s.id));
-                                } else {
-                                    songs.retain(|s| std::path::Path::new(&s.path).is_file());
-                                }
-                                sort_tracks_alphabetical(&mut songs);
-                                let batch_value = selected.len() > 1;
-                                let labels: Vec<slint::SharedString> = songs
-                                    .iter()
-                                    .map(|s| format!("{} · {}", s.title, s.artist).into())
-                                    .collect();
-                                update(&weak, move |u| {
-                                    u.set_batch(batch_value);
-                                    u.set_songs(ModelRc::new(VecModel::from(labels)));
-                                });
-                                return Ok(String::new());
-                            }
+
                             songs = Library::open(&data.join("library.sqlite3"))?.tracks(0)?;
-                            if !selected.is_empty() {
-                                if selected.len() > 100 {
-                                    return Err("Share up to 100 songs per batch. Each song can be up to 100 MB.".into());
-                                }
-                                songs.retain(|s| selected.contains(&s.id));
-                                if songs.len() != selected.len() {
-                                    return Err(
-                                        "A selected song no longer exists. Refresh your selection."
-                                            .into(),
-                                    );
-                                }
-                            } else {
-                                songs.retain(|s| std::path::Path::new(&s.path).is_file());
-                            }
+                            songs.retain(|s| std::path::Path::new(&s.path).is_file());
                             sort_tracks_alphabetical(&mut songs);
 
                             let _ = worker_thumbs.send(ThumbAction::Catalog(
@@ -589,17 +594,18 @@ impl Sharing {
                                 })
                                 .collect();
                             let _ = worker_cat_tx.send(entries.clone());
-                            let batch_value = batch;
                             let labels: Vec<slint::SharedString> =
                                 entries.iter().map(|e| e.label.clone().into()).collect();
-                            let selected_idx = if songs.is_empty() { -1 } else { 0 };
                             let ui_thumbs = worker_thumbs.clone();
-                            update(&weak, move |u| {
-                                u.set_batch(batch_value);
+                            let _ = weak.upgrade_in_event_loop(move |app| {
+                                let u = app.global::<SharingState>();
                                 u.set_songs(ModelRc::new(VecModel::from(labels)));
-                                u.set_song_index(selected_idx);
-                                apply_song_filter(&u, &entries, &ui_thumbs);
+                                u.invoke_filter_songs();
+                                let _ = &ui_thumbs;
                             });
+                            if method == 0 {
+                                return Ok(String::new());
+                            }
 
                             let mut notice = None;
                             if method == 1 {
@@ -633,7 +639,7 @@ impl Sharing {
                                     "Ready on Wi-Fi · Open Monolith → Share → Wi-Fi on your other device to connect automatically."
                                 }
                                 (1, false) => {
-                                    "Choose a song and device, then send. The recipient approves each song."
+                                    "Check one or more songs, pick a device, then send. The recipient approves each song."
                                 }
                                 _ => "Choose a paired device running Monolith, or press Receive.",
                             };
@@ -656,15 +662,22 @@ impl Sharing {
                             listening_until = Some(Instant::now() + Duration::from_secs(300));
                             Ok("Receiving for 5 minutes. Each song needs your approval. Cancel or leave Share to stop.".into())
                         }
-                        Action::Send(song_index, peer_id) => {
+                        Action::Send(track_ids, peer_id) => {
                             let peer = peers.iter().find(|p| p.id() == peer_id).ok_or(
                                 "That device is no longer available. Choose a nearby device again.",
                             )?;
-                            let selected: Vec<&Track> = if batch {
-                                songs.iter().collect()
-                            } else {
-                                vec![songs.get(song_index).ok_or("Choose a song.")?]
-                            };
+                            if track_ids.is_empty() {
+                                return Err("Choose at least one song to share.".into());
+                            }
+                            if track_ids.len() > MAX_SHARE_BATCH {
+                                return Err("Max 100 songs per batch (100 MB each).".into());
+                            }
+                            let wanted: BTreeSet<i64> = track_ids.into_iter().collect();
+                            let selected: Vec<&Track> =
+                                songs.iter().filter(|s| wanted.contains(&s.id)).collect();
+                            if selected.is_empty() {
+                                return Err("Selected songs unavailable. Refresh.".into());
+                            }
                             let offers: Vec<_> = selected
                                 .iter()
                                 .map(|s| {
@@ -871,8 +884,6 @@ impl Sharing {
             }
         };
 
-        let selection = Rc::new(RefCell::new(Vec::new()));
-
         {
             let tx = thumb_tx.clone();
             ui.on_request_thumbnail(move |id| {
@@ -884,14 +895,15 @@ impl Sharing {
 
         {
             let weak = app.as_weak();
-            let cat = catalog.clone();
-            let drain = drain_rc.clone();
+            let cat = ui_cat_sync.clone();
+            let sel = ui_sel_sync.clone();
+            let drain = ui_drain_sync.clone();
             let t_tx = thumb_tx.clone();
             ui.on_filter_songs(move || {
                 drain();
                 if let Some(app) = weak.upgrade() {
                     let ui = app.global::<SharingState>();
-                    apply_song_filter(&ui, &cat.borrow(), &t_tx);
+                    apply_song_filter(&ui, &cat.borrow(), &mut sel.borrow_mut(), &t_tx);
                 }
             });
         }
@@ -899,35 +911,142 @@ impl Sharing {
         {
             let weak = app.as_weak();
             let cat = catalog.clone();
+            let sel = selected_ids.clone();
             let drain = drain_rc.clone();
             let t_tx = thumb_tx.clone();
             ui.on_select_song(move |index| {
                 drain();
                 if let Some(app) = weak.upgrade() {
-                    let ui = app.global::<SharingState>();
-                    ui.set_song_index(index);
-                    sync_selected_preview(&ui, &cat.borrow(), &t_tx);
+                    let entries = cat.borrow();
+                    if let Some(entry) = usize::try_from(index).ok().and_then(|i| entries.get(i)) {
+                        let ui = app.global::<SharingState>();
+                        let mut set = sel.borrow_mut();
+                        if !set.remove(&entry.id) {
+                            if set.len() >= MAX_SHARE_BATCH {
+                                ui.set_status_error(false);
+                                ui.set_status("Up to 100 songs can be sent per batch.".into());
+                            } else {
+                                set.insert(entry.id);
+                            }
+                        }
+                        update_rows_checked_in_place(&ui, &entries, &set, &t_tx);
+                    }
                 }
             });
         }
 
         {
-            let (weak, sender, active, is_closed, selected) = (
+            let weak = app.as_weak();
+            let cat = catalog.clone();
+            let sel = selected_ids.clone();
+            let drain = drain_rc.clone();
+            let t_tx = thumb_tx.clone();
+            ui.on_toggle_song(move |id| {
+                drain();
+                let id = i64::from(id);
+                if id <= 0 {
+                    return;
+                }
+                if let Some(app) = weak.upgrade() {
+                    let ui = app.global::<SharingState>();
+                    let entries = cat.borrow();
+                    let mut set = sel.borrow_mut();
+                    if !set.remove(&id) {
+                        if set.len() >= MAX_SHARE_BATCH {
+                            ui.set_status_error(false);
+                            ui.set_status("Up to 100 songs can be sent per batch.".into());
+                        } else {
+                            set.insert(id);
+                        }
+                    }
+                    update_rows_checked_in_place(&ui, &entries, &set, &t_tx);
+                }
+            });
+        }
+
+        {
+            let weak = app.as_weak();
+            let cat = catalog.clone();
+            let sel = selected_ids.clone();
+            let drain = drain_rc.clone();
+            let t_tx = thumb_tx.clone();
+            ui.on_toggle_filtered_songs(move || {
+                drain();
+                if let Some(app) = weak.upgrade() {
+                    let ui = app.global::<SharingState>();
+                    let entries = cat.borrow();
+                    let mut set = sel.borrow_mut();
+                    let rows = ui.get_song_results();
+                    let visible_ids: Vec<i64> = (0..rows.row_count())
+                        .filter_map(|i| rows.row_data(i).map(|r| i64::from(r.id)))
+                        .collect();
+                    let all_checked =
+                        !visible_ids.is_empty() && visible_ids.iter().all(|id| set.contains(id));
+                    if all_checked {
+                        for id in visible_ids {
+                            set.remove(&id);
+                        }
+                    } else {
+                        let mut capped = false;
+                        for id in visible_ids {
+                            if set.len() >= MAX_SHARE_BATCH {
+                                capped = true;
+                                break;
+                            }
+                            set.insert(id);
+                        }
+                        if capped {
+                            ui.set_status_error(false);
+                            ui.set_status("Selected first 100 songs (batch limit).".into());
+                        }
+                    }
+                    update_rows_checked_in_place(&ui, &entries, &set, &t_tx);
+                }
+            });
+        }
+
+        {
+            let weak = app.as_weak();
+            let cat = catalog.clone();
+            let sel = selected_ids.clone();
+            let drain = drain_rc.clone();
+            let t_tx = thumb_tx.clone();
+            ui.on_clear_selected_songs(move || {
+                drain();
+                if let Some(app) = weak.upgrade() {
+                    let ui = app.global::<SharingState>();
+                    let entries = cat.borrow();
+                    let mut set = sel.borrow_mut();
+                    set.clear();
+                    update_rows_checked_in_place(&ui, &entries, &set, &t_tx);
+                }
+            });
+        }
+
+        {
+            let (weak, sender, active, is_closed, sel) = (
                 app.as_weak(),
                 tx.clone(),
                 running.clone(),
                 closed.clone(),
-                selection.clone(),
+                selected_ids.clone(),
             );
             ui.on_open(move |use_selection| {
                 if let Some(app) = weak.upgrade() {
                     let ui = app.global::<SharingState>();
-                    let ids = if use_selection {
-                        app.get_selected_ids().iter().map(i64::from).collect()
+                    let ids: BTreeSet<i64> = if use_selection {
+                        app.get_selected_ids()
+                            .iter()
+                            .map(i64::from)
+                            .take(MAX_SHARE_BATCH)
+                            .collect()
                     } else {
-                        Vec::new()
+                        BTreeSet::new()
                     };
-                    selected.replace(ids);
+                    let count = ids.len() as i32;
+                    *sel.borrow_mut() = ids;
+                    ui.set_selected_count(count);
+                    ui.set_batch(count > 1);
                     ui.set_destination(app.get_download_folder());
                     ui.set_method(0);
                     ui.set_song_query("".into());
@@ -937,33 +1056,18 @@ impl Sharing {
                     ui.set_receiving_port("".into());
                     ui.set_status_error(false);
                     is_closed.store(false, Ordering::Release);
-                    start(
-                        refresh_action(&app, selected.borrow().clone()),
-                        &sender,
-                        &active,
-                        &ui,
-                    );
+                    start(refresh_action(&app), &sender, &active, &ui);
                 }
             });
         }
 
         {
-            let (weak, sender, active, selected) = (
-                app.as_weak(),
-                tx.clone(),
-                running.clone(),
-                selection.clone(),
-            );
+            let (weak, sender, active) = (app.as_weak(), tx.clone(), running.clone());
             ui.on_refresh(move || {
                 if let Some(app) = weak.upgrade() {
                     let ui = app.global::<SharingState>();
                     if !active.load(Ordering::Acquire) {
-                        start(
-                            refresh_action(&app, selected.borrow().clone()),
-                            &sender,
-                            &active,
-                            &ui,
-                        );
+                        start(refresh_action(&app), &sender, &active, &ui);
                     }
                 }
             });
@@ -976,28 +1080,44 @@ impl Sharing {
                     let ui = app.global::<SharingState>();
                     if !active.load(Ordering::Acquire) {
                         ui.set_method(method);
-                        start(
-                            refresh_action(&app, selection.borrow().clone()),
-                            &sender,
-                            &active,
-                            &ui,
-                        );
+                        start(refresh_action(&app), &sender, &active, &ui);
                     }
                 }
             });
         }
 
         {
-            let (nearby, sender, active) = (app.as_weak(), tx.clone(), running.clone());
-            ui.on_send_song(move |song, peer| {
+            let (nearby, sender, active, sel, cat, drain) = (
+                app.as_weak(),
+                tx.clone(),
+                running.clone(),
+                selected_ids.clone(),
+                catalog.clone(),
+                drain_rc.clone(),
+            );
+            ui.on_send_song(move |_song, peer| {
+                drain();
                 if let Some(app) = nearby.upgrade() {
                     let ui = app.global::<SharingState>();
-                    if song >= 0 && peer >= 0 && !active.load(Ordering::Acquire) {
+                    if peer >= 0 && !active.load(Ordering::Acquire) {
+                        let set = sel.borrow();
+                        if set.is_empty() {
+                            return;
+                        }
+                        let entries = cat.borrow();
+                        let mut ids: Vec<i64> = entries
+                            .iter()
+                            .filter(|e| set.contains(&e.id))
+                            .map(|e| e.id)
+                            .collect();
+                        if ids.is_empty() {
+                            ids.extend(set.iter().copied());
+                        }
                         let Some(peer_id) = ui.get_device_ids().row_data(peer as usize) else {
                             return;
                         };
                         start(
-                            Action::Send(song as usize, peer_id.to_string()),
+                            Action::Send(ids, peer_id.to_string()),
                             &sender,
                             &active,
                             &ui,

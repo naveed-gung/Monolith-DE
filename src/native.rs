@@ -369,3 +369,235 @@ pub fn system_light_theme() -> bool {
 pub fn animations_enabled() -> bool {
     true
 }
+
+#[cfg(unix)]
+mod unix_ipc {
+    use crate::{
+        AppWindow,
+        controller::{Command, PlaybackSnapshot},
+    };
+    use serde_json::{Value, json};
+    use slint::{ComponentHandle, winit_030::WinitWindowAccessor};
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::{
+            fs::PermissionsExt,
+            net::{UnixListener, UnixStream},
+        },
+        path::PathBuf,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
+        thread::JoinHandle,
+        time::Duration,
+    };
+
+    pub struct UnixIpc {
+        path: PathBuf,
+        stop: Arc<AtomicBool>,
+        worker: Option<JoinHandle<()>>,
+    }
+
+    fn socket_path() -> Option<PathBuf> {
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR")?;
+        Some(PathBuf::from(runtime).join("monolith-desktop.sock"))
+    }
+
+    impl UnixIpc {
+        pub fn bind(
+            app: &AppWindow,
+            tx: mpsc::Sender<Command>,
+            snapshot: Arc<Mutex<PlaybackSnapshot>>,
+        ) -> Option<Self> {
+            let path = socket_path()?;
+            if path.exists() {
+                if UnixStream::connect(&path).is_ok() {
+                    return None;
+                }
+                let _ = std::fs::remove_file(&path);
+            }
+            let listener = UnixListener::bind(&path).ok()?;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            let _ = listener.set_nonblocking(true);
+            let stop = Arc::new(AtomicBool::new(false));
+            let stop_flag = stop.clone();
+            let weak = app.as_weak();
+            let worker = std::thread::spawn(move || {
+                while !stop_flag.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let _ = stream.set_read_timeout(Some(Duration::from_millis(1800)));
+                            let _ = stream.set_write_timeout(Some(Duration::from_millis(1800)));
+                            let mut line = String::new();
+                            if let Ok(mut reader) = stream.try_clone().map(BufReader::new) {
+                                let _ = reader.read_line(&mut line);
+                            }
+                            let reply = handle_request(line.trim(), &weak, &tx, &snapshot);
+                            let _ = stream.write_all(reply.as_bytes());
+                            let _ = stream.write_all(b"\n");
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(40));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            Some(Self {
+                path,
+                stop,
+                worker: Some(worker),
+            })
+        }
+    }
+
+    fn handle_request(
+        raw: &str,
+        weak: &slint::Weak<AppWindow>,
+        tx: &mpsc::Sender<Command>,
+        snapshot: &Arc<Mutex<PlaybackSnapshot>>,
+    ) -> String {
+        let Ok(req) = serde_json::from_str::<Value>(raw) else {
+            return json!({"ok": false, "error": "invalid json"}).to_string();
+        };
+        let cmd = req.get("cmd").and_then(Value::as_str).unwrap_or("");
+        match cmd {
+            "state" => {
+                if let Ok(s) = snapshot.lock() {
+                    if !s.ready {
+                        return json!({"ok": false, "starting": true}).to_string();
+                    }
+                    return json!({
+                        "ok": true,
+                        "status": s.status,
+                        "id": s.id,
+                        "title": s.title,
+                        "artist": s.artist,
+                        "album": s.album,
+                        "path": s.path,
+                        "duration": s.duration,
+                        "position": s.position,
+                        "volume": s.volume,
+                        "shuffle": s.shuffle,
+                        "repeat": s.repeat,
+                    })
+                    .to_string();
+                }
+                json!({"ok": false}).to_string()
+            }
+            "handoff" => {
+                let id = req.get("id").and_then(Value::as_i64).unwrap_or(-1);
+                let position = req.get("pos").and_then(Value::as_f64).unwrap_or(0.);
+                let play = req.get("play").and_then(Value::as_bool).unwrap_or(false);
+                let shuffle = req.get("shuffle").and_then(Value::as_bool).unwrap_or(false);
+                let repeat = req.get("repeat").and_then(Value::as_i64).unwrap_or(0) as i32;
+                let volume = req.get("volume").and_then(Value::as_f64).unwrap_or(70.) as f32;
+                let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+                let msg = Command::Handoff {
+                    id,
+                    position,
+                    play,
+                    shuffle,
+                    repeat,
+                    volume,
+                    reply: reply_tx,
+                };
+                if tx.send(msg).is_err() {
+                    return json!({"ok": false, "error": "worker closed"}).to_string();
+                }
+                match reply_rx.recv_timeout(Duration::from_millis(1800)) {
+                    Ok(Ok(())) => json!({"ok": true}).to_string(),
+                    Ok(Err(err)) => json!({"ok": false, "error": err}).to_string(),
+                    Err(_) => json!({"ok": false, "error": "handoff timeout"}).to_string(),
+                }
+            }
+            "play" => {
+                let _ = tx.send(Command::Resume);
+                json!({"ok": true}).to_string()
+            }
+            "pause" => {
+                let _ = tx.send(Command::Pause);
+                json!({"ok": true}).to_string()
+            }
+            "toggle" => {
+                let _ = tx.send(Command::Toggle);
+                json!({"ok": true}).to_string()
+            }
+            "stop" => {
+                let _ = tx.send(Command::Stop);
+                json!({"ok": true}).to_string()
+            }
+            "next" => {
+                let _ = tx.send(Command::Next(1));
+                json!({"ok": true}).to_string()
+            }
+            "prev" => {
+                let _ = tx.send(Command::Next(-1));
+                json!({"ok": true}).to_string()
+            }
+            "seek" => {
+                if let Some(pos) = req.get("pos").and_then(Value::as_f64) {
+                    let _ = tx.send(Command::Seek(pos as f32));
+                }
+                json!({"ok": true}).to_string()
+            }
+            "seek_rel" => {
+                if let Some(offset) = req.get("offset").and_then(Value::as_f64) {
+                    let cur = snapshot.lock().map_or(0., |s| s.position);
+                    let _ = tx.send(Command::Seek((cur + offset).max(0.) as f32));
+                }
+                json!({"ok": true}).to_string()
+            }
+            "volume" => {
+                if let Some(val) = req.get("val").and_then(Value::as_f64) {
+                    let _ = tx.send(Command::Volume(val as f32));
+                }
+                json!({"ok": true}).to_string()
+            }
+            "shuffle" => {
+                if let Some(val) = req.get("val").and_then(Value::as_bool) {
+                    let _ = tx.send(Command::Shuffle(val));
+                }
+                json!({"ok": true}).to_string()
+            }
+            "repeat" => {
+                if let Some(val) = req.get("val").and_then(Value::as_i64) {
+                    let _ = tx.send(Command::Repeat(val as i32));
+                }
+                json!({"ok": true}).to_string()
+            }
+            "raise" => {
+                let _ = weak.upgrade_in_event_loop(|ui| {
+                    ui.window().with_winit_window(|w| {
+                        w.set_minimized(false);
+                        w.set_visible(true);
+                        w.focus_window();
+                    });
+                    let _ = ui.show();
+                });
+                json!({"ok": true}).to_string()
+            }
+            "quit" => {
+                let _ = slint::quit_event_loop();
+                json!({"ok": true}).to_string()
+            }
+            _ => json!({"ok": false, "error": "unknown cmd"}).to_string(),
+        }
+    }
+
+    impl Drop for UnixIpc {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            let _ = UnixStream::connect(&self.path);
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+#[cfg(unix)]
+pub use unix_ipc::UnixIpc;

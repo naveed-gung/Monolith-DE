@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.5
+
+- Share page now supports selecting and sending multiple songs directly in the
+  picker, preserving selections across search filters with select-shown and
+  clear actions.
+- Fixed fullscreen Share split-view layout so long song titles never compress
+  the right-hand nearby devices and transfer dock column.
+- Player bar and expanded player now load cover art immediately on startup,
+  resume, and external handoff, center-cropping widescreen WebP sidecar artwork
+  cleanly to square with rounded corners.
+- Added Unix IPC playback state and atomic handoff plus DASH M4A seek fallback
+  so media-bar playback continues seamlessly inside Monolith without stopping,
+  paired with unbiased OS-seeded Fisher-Yates shuffle.
+
 ## 0.7.4
 
 - Redesigned Share hub and Wi-Fi/Bluetooth sub-pages with top-left back

@@ -6,15 +6,109 @@ use monolith_desktop::{
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 use slint::{Model, ModelRc, VecModel};
 use std::{
-    hash::BuildHasher,
+    hash::{BuildHasher, Hasher},
     path::PathBuf,
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+#[derive(Clone, Default)]
+pub struct PlaybackSnapshot {
+    pub ready: bool,
+    pub status: &'static str,
+    pub id: i64,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub path: String,
+    pub duration: f64,
+    pub position: f64,
+    pub volume: f32,
+    pub shuffle: bool,
+    pub repeat: i32,
+}
+
+static SHUFFLE_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn fresh_entropy_seed() -> u64 {
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        let mut buf = [0u8; 8];
+        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+            if f.read_exact(&mut buf).is_ok() {
+                let v = u64::from_ne_bytes(buf);
+                if v != 0 {
+                    return v;
+                }
+            }
+        }
+    }
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    let seq = SHUFFLE_COUNTER.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed);
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u64(nanos ^ seq);
+    hasher.finish()
+}
+
+fn next_splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+fn uniform_index(state: &mut u64, upper: usize) -> usize {
+    if upper <= 1 {
+        return 0;
+    }
+    let bound = upper as u64;
+    let zone = u64::MAX - (u64::MAX % bound);
+    loop {
+        let r = next_splitmix64(state);
+        if r < zone {
+            return (r % bound) as usize;
+        }
+    }
+}
+
+/// Unbiased OS-seeded Fisher-Yates shuffle.
+/// If `pin_first` is in `ids`, places it at index 0 and shuffles `ids[1..]`.
+/// Otherwise, if `avoid_first` matches `ids[0]` and `ids.len() > 1`, swaps index 0
+/// with a random index in `1..ids.len()` so wrap-around never repeats back-to-back.
+pub(crate) fn shuffle_ids(ids: &mut [i64], pin_first: Option<i64>, avoid_first: Option<i64>) {
+    if ids.len() <= 1 {
+        return;
+    }
+    let mut rng = fresh_entropy_seed()
+        ^ SHUFFLE_COUNTER.fetch_add(0x517C_C1B7_2722_0A95, Ordering::Relaxed);
+    let start = if let Some(pin) = pin_first {
+        if let Some(pos) = ids.iter().position(|x| *x == pin) {
+            ids.swap(0, pos);
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    let tail = &mut ids[start..];
+    for i in (1..tail.len()).rev() {
+        let j = uniform_index(&mut rng, i + 1);
+        tail.swap(i, j);
+    }
+    if start == 0 && ids.len() > 1 && avoid_first.is_some_and(|avoid| ids[0] == avoid) {
+        let swap_idx = 1 + uniform_index(&mut rng, ids.len() - 1);
+        ids.swap(0, swap_idx);
+    }
+}
 
 pub enum Command {
     Import(Vec<PathBuf>),
@@ -51,6 +145,15 @@ pub enum Command {
     Save(String, String),
     Shuffle(bool),
     Repeat(i32),
+    Handoff {
+        id: i64,
+        position: f64,
+        play: bool,
+        shuffle: bool,
+        repeat: i32,
+        volume: f32,
+        reply: mpsc::SyncSender<std::result::Result<(), String>>,
+    },
     Download(String, bool),
     Downloaded(String, std::result::Result<PathBuf, String>),
     /// Re-probe helper locations after a tool install or a stale setting.
@@ -93,11 +196,14 @@ struct Worker {
     queue: Vec<i64>,
     current: Option<i64>,
     position: f64,
+    pos_offset: f64,
     audio: Option<Audio>,
     volume: f32,
     shuffle: bool,
     repeat: i32,
+    stopped: bool,
     last_second: u64,
+    snapshot: Arc<Mutex<PlaybackSnapshot>>,
 }
 
 /// How many tracks keep decoded artwork in memory. Each entry holds a bar and
@@ -184,6 +290,9 @@ impl Worker {
         self.selected.retain(|id| live.contains(id));
         self.art.retain(|id, _| live.contains(id));
         self.art_order.retain(|id| live.contains(id));
+        if repaired || self.current.is_some_and(|id| !self.art.contains_key(&id)) {
+            self.sync_cover();
+        }
         Ok(())
     }
     /// Applies the current filter to the already-loaded library and pushes the
@@ -312,17 +421,16 @@ impl Worker {
         self.reload()?;
         self.apply_filter()
     }
+    fn live_position(&self) -> f64 {
+        self.audio
+            .as_ref()
+            .map_or(self.position, |a| self.pos_offset + a.sink.get_pos().as_secs_f64())
+    }
     fn persist(&self) -> Result<()> {
-        self.db
-            .save("current", &self.current.unwrap_or(-1).to_string())?;
-        self.db.save(
-            "position",
-            &self
-                .audio
-                .as_ref()
-                .map_or(self.position, |a| a.sink.get_pos().as_secs_f64())
-                .to_string(),
-        )?;
+        let cur = self.current.unwrap_or(-1).to_string();
+        let pos = self.live_position().to_string();
+        self.db.save("current", &cur)?;
+        self.db.save("position", &pos)?;
         self.db.save(
             "queue",
             &self
@@ -334,7 +442,94 @@ impl Worker {
         )?;
         Ok(())
     }
+    /// Full track pool for the active collection scope (All music, Favorites, or
+    /// selected Playlist), ignoring temporary search text so Shuffle never gets
+    /// trapped looping a 2-song or 10-song search result.
+    fn collection_ids(&self) -> Vec<i64> {
+        let mut ids = vec![0, -1];
+        ids.extend(self.playlists.iter().map(|p| p.0));
+        let selected = if self.page == 1 || self.filter >= ids.len() {
+            0
+        } else {
+            ids[self.filter]
+        };
+        let members = self.members.get(&selected);
+        let mut pool: Vec<Track> = self
+            .all
+            .iter()
+            .filter(|t| match selected {
+                0 => true,
+                -1 => t.favorite,
+                _ => members.is_some_and(|set| set.contains(&t.id)),
+            })
+            .cloned()
+            .collect();
+        if pool.is_empty() {
+            pool = self.all.clone();
+        }
+        if self.page == 1 {
+            match self.sort {
+                1 => pool.sort_by(|a, b| {
+                    a.artist
+                        .to_lowercase()
+                        .cmp(&b.artist.to_lowercase())
+                        .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+                }),
+                2 => pool.sort_by(|a, b| {
+                    a.album
+                        .to_lowercase()
+                        .cmp(&b.album.to_lowercase())
+                        .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+                }),
+                3 => pool.sort_by(|a, b| b.id.cmp(&a.id)),
+                _ => pool.sort_by(|a, b| {
+                    a.title
+                        .to_lowercase()
+                        .cmp(&b.title.to_lowercase())
+                        .then_with(|| a.artist.to_lowercase().cmp(&b.artist.to_lowercase()))
+                }),
+            }
+        }
+        pool.into_iter().map(|t| t.id).collect()
+    }
+    fn sync_snapshot(&self) {
+        let track = self
+            .current
+            .and_then(|id| self.all.iter().find(|t| t.id == id));
+        let status = if self.audio.is_some() {
+            "Playing"
+        } else if track.is_some() && !self.stopped {
+            "Paused"
+        } else {
+            "Stopped"
+        };
+        let position = self.live_position();
+        if let Ok(mut snap) = self.snapshot.lock() {
+            snap.ready = true;
+            snap.status = status;
+            snap.position = position;
+            snap.volume = self.volume;
+            snap.shuffle = self.shuffle;
+            snap.repeat = self.repeat;
+            if let Some(t) = track {
+                snap.id = t.id;
+                snap.title.clone_from(&t.title);
+                snap.artist.clone_from(&t.artist);
+                snap.album.clone_from(&t.album);
+                snap.path.clone_from(&t.path);
+                snap.duration = t.seconds;
+            } else {
+                snap.id = -1;
+                snap.title.clear();
+                snap.artist.clear();
+                snap.album.clear();
+                snap.path.clear();
+                snap.duration = 0.;
+            }
+        }
+    }
     fn show_player(&self) {
+        self.sync_snapshot();
         let track = self
             .current
             .and_then(|id| self.all.iter().find(|t| t.id == id))
@@ -357,6 +552,59 @@ impl Worker {
                 ui.set_current_artist("Choose a track to begin".into());
                 ui.set_duration(0.);
                 ui.set_total_time("0:00".into());
+            }
+            ui.invoke_transport_changed();
+        });
+    }
+    fn sync_cover(&mut self) {
+        let current_track = self.current.and_then(|id| {
+            self.all
+                .iter()
+                .find(|t| t.id == id)
+                .map(|t| (id, t.path.clone()))
+        });
+        let art = match current_track {
+            None => None,
+            Some((id, path)) => match self.art.remove(&id) {
+                Some(cached) => {
+                    self.art_order.retain(|cached_id| *cached_id != id);
+                    self.art_order.push_back(id);
+                    self.art.insert(id, cached.clone());
+                    Some(cached)
+                }
+                None => {
+                    let decoded = cover(&path);
+                    if let Some(art) = &decoded {
+                        self.art.insert(id, art.clone());
+                        self.art_order.push_back(id);
+                        while self.art_order.len() > ART_CACHE_LIMIT {
+                            if let Some(oldest) = self.art_order.pop_front() {
+                                self.art.remove(&oldest);
+                            }
+                        }
+                    }
+                    decoded
+                }
+            },
+        };
+        update(&self.ui, move |u| {
+            let present = art.is_some();
+            u.set_has_cover(present);
+            u.set_has_cover_expanded(present);
+            if let Some((bar, expanded)) = art {
+                u.set_cover(slint::Image::from_rgba8(
+                    slint::SharedPixelBuffer::clone_from_slice(&bar.bytes, bar.width, bar.height),
+                ));
+                u.set_cover_expanded(slint::Image::from_rgba8(
+                    slint::SharedPixelBuffer::clone_from_slice(
+                        &expanded.bytes,
+                        expanded.width,
+                        expanded.height,
+                    ),
+                ));
+            } else {
+                u.set_cover(slint::Image::default());
+                u.set_cover_expanded(slint::Image::default());
             }
         });
     }
@@ -390,7 +638,7 @@ impl Worker {
             .map_or(t.seconds, |d| d.as_secs_f64());
         let mut stream = OutputStreamBuilder::open_default_stream()?;
         stream.log_on_drop(false);
-        let sink = Sink::connect_new(stream.mixer());
+        let mut sink = Sink::connect_new(stream.mixer());
         sink.pause();
         sink.set_volume(self.volume);
         sink.append(decoder);
@@ -399,9 +647,18 @@ impl Worker {
         } else {
             position.clamp(0., duration.max(0.))
         };
-        if position > 0. {
-            sink.try_seek(Duration::from_secs_f64(position))
-                .map_err(|e| e.to_string())?;
+        let mut pos_offset = 0.;
+        if position > 0. && sink.try_seek(Duration::from_secs_f64(position)).is_err() {
+            // Fragmented DASH M4A files from yt-dlp can reject container-level seek;
+            // fall back to fast sample-skipping so resume and handoff never fail.
+            drop(sink);
+            sink = Sink::connect_new(stream.mixer());
+            sink.pause();
+            sink.set_volume(self.volume);
+            let fallback = Decoder::try_from(std::fs::File::open(&t.path)?)?
+                .skip_duration(Duration::from_secs_f64(position));
+            sink.append(fallback);
+            pos_offset = position;
         }
         // Decode/open succeeds before replacing the current track.
         self.audio.take();
@@ -412,78 +669,40 @@ impl Worker {
         });
         self.current = Some(id);
         self.position = position;
+        self.pos_offset = pos_offset;
+        self.stopped = false;
         self.last_second = u64::MAX;
         if let Some(t) = self.all.iter_mut().find(|t| t.id == id) {
             t.seconds = duration;
         }
         self.show_player();
         self.persist()?;
-        if let Some(t) = self.all.iter().find(|t| t.id == id) {
-            // Reuse decoded artwork before hitting the disk again.
-            let art = match self.art.remove(&id) {
-                Some(cached) => {
-                    self.art_order.retain(|cached_id| *cached_id != id);
-                    self.art_order.push_back(id);
-                    self.art.insert(id, cached.clone());
-                    Some(cached)
-                }
-                None => {
-                    let decoded = cover(&t.path);
-                    if let Some(art) = &decoded {
-                        self.art.insert(id, art.clone());
-                        self.art_order.push_back(id);
-                        while self.art_order.len() > ART_CACHE_LIMIT {
-                            if let Some(oldest) = self.art_order.pop_front() {
-                                self.art.remove(&oldest);
-                            }
-                        }
-                    }
-                    decoded
-                }
-            };
-            update(&self.ui, move |u| {
-                let present = art.is_some();
-                u.set_has_cover(present);
-                u.set_has_cover_expanded(present);
-                if let Some((bar, expanded)) = art {
-                    u.set_cover(slint::Image::from_rgba8(
-                        slint::SharedPixelBuffer::clone_from_slice(
-                            &bar.bytes, bar.width, bar.height,
-                        ),
-                    ));
-                    u.set_cover_expanded(slint::Image::from_rgba8(
-                        slint::SharedPixelBuffer::clone_from_slice(
-                            &expanded.bytes,
-                            expanded.width,
-                            expanded.height,
-                        ),
-                    ));
-                }
-            });
-        }
+        self.sync_cover();
         status(&self.ui, "Playing from your library.");
         Ok(())
     }
     fn pause(&mut self) -> Result<()> {
         if let Some(audio) = self.audio.take() {
-            self.position = audio.sink.get_pos().as_secs_f64();
+            self.position = self.pos_offset + audio.sink.get_pos().as_secs_f64();
             drop(audio);
         }
+        self.pos_offset = 0.;
+        self.stopped = false;
         self.show_player();
         self.persist()?;
         Ok(())
     }
     fn next(&mut self, direction: i32, ended: bool) -> Result<()> {
         if self.queue.is_empty() {
+            self.queue = self.collection_ids();
+            if self.shuffle {
+                shuffle_ids(&mut self.queue, self.current, None);
+            }
+        }
+        if self.queue.is_empty() {
             return Ok(());
         }
-        if direction < 0
-            && self
-                .audio
-                .as_ref()
-                .map_or(self.position, |a| a.sink.get_pos().as_secs_f64())
-                > 3.
-        {
+        if direction < 0 && self.live_position() > 3. {
             if let Some(id) = self.current {
                 return self.start(id, 0.);
             }
@@ -498,11 +717,17 @@ impl Worker {
             index as i32 + direction
         };
         if next < 0 || next >= self.queue.len() as i32 {
-            if self.repeat == 1 {
-                return self.start(
-                    self.queue[next.rem_euclid(self.queue.len() as i32) as usize],
-                    0.,
-                );
+            if self.repeat == 1 || !ended {
+                if self.shuffle && next >= self.queue.len() as i32 {
+                    let full = self.collection_ids();
+                    if full.len() > self.queue.len() {
+                        self.queue = full;
+                    }
+                    shuffle_ids(&mut self.queue, None, self.current);
+                    return self.start(self.queue[0], 0.);
+                }
+                let wrapped = next.rem_euclid(self.queue.len() as i32) as usize;
+                return self.start(self.queue[wrapped], 0.);
             }
             self.pause()?;
             return Ok(());
@@ -616,12 +841,21 @@ impl Worker {
                 status(&self.ui, "Song reconnected. Favorites and playlists kept.");
             }
             Command::Play(id) => {
-                self.queue = self.visible.clone();
                 if self.shuffle {
-                    let hash = std::collections::hash_map::RandomState::new();
-                    self.queue.sort_by_cached_key(|candidate| {
-                        (*candidate != id, hash.hash_one(candidate))
-                    });
+                    let mut pool = self.collection_ids();
+                    if !pool.contains(&id) {
+                        pool = self.all.iter().map(|t| t.id).collect();
+                    }
+                    shuffle_ids(&mut pool, Some(id), None);
+                    self.queue = pool;
+                } else if self.query.trim().is_empty() || self.visible.len() <= 1 {
+                    let mut pool = self.collection_ids();
+                    if !pool.contains(&id) {
+                        pool = self.all.iter().map(|t| t.id).collect();
+                    }
+                    self.queue = pool;
+                } else {
+                    self.queue = self.visible.clone();
                 }
                 self.start(id, 0.)?
             }
@@ -630,9 +864,15 @@ impl Worker {
                 if self.audio.is_none() {
                     if let Some(id) = self.current {
                         self.start(id, self.position)?
-                    } else if let Some(id) = self.visible.first().copied() {
-                        self.queue = self.visible.clone();
-                        self.start(id, 0.)?
+                    } else {
+                        let mut pool = self.collection_ids();
+                        if self.shuffle {
+                            shuffle_ids(&mut pool, None, None);
+                        }
+                        if let Some(id) = pool.first().copied() {
+                            self.queue = pool;
+                            self.start(id, 0.)?
+                        }
                     }
                 }
             }
@@ -641,15 +881,24 @@ impl Worker {
                     self.pause()?
                 } else if let Some(id) = self.current {
                     self.start(id, self.position)?
-                } else if let Some(id) = self.visible.first().copied() {
-                    self.queue = self.visible.clone();
-                    self.start(id, 0.)?
+                } else {
+                    let mut pool = self.collection_ids();
+                    if self.shuffle {
+                        shuffle_ids(&mut pool, None, None);
+                    }
+                    if let Some(id) = pool.first().copied() {
+                        self.queue = pool;
+                        self.start(id, 0.)?
+                    }
                 }
             }
             Command::Stop => {
                 self.audio.take();
+                self.pos_offset = 0.;
                 self.position = 0.;
+                self.stopped = true;
                 self.show_player();
+                self.sync_cover();
                 self.persist()?;
             }
             Command::Next(d) => self.next(d, false)?,
@@ -662,10 +911,18 @@ impl Worker {
                     .and_then(|id| self.all.iter().find(|t| t.id == id))
                     .map_or(0., |t| t.seconds);
                 let pos = (position as f64).clamp(0., end.max(0.));
-                if let Some(a) = &self.audio {
-                    a.sink
-                        .try_seek(Duration::from_secs_f64(pos))
-                        .map_err(|e| e.to_string())?;
+                if self.audio.is_some() {
+                    let mut seeked = false;
+                    if self.pos_offset == 0. {
+                        if let Some(a) = &self.audio {
+                            seeked = a.sink.try_seek(Duration::from_secs_f64(pos)).is_ok();
+                        }
+                    }
+                    if !seeked {
+                        if let Some(id) = self.current {
+                            return self.start(id, pos);
+                        }
+                    }
                 }
                 self.position = pos;
                 self.show_player();
@@ -679,6 +936,9 @@ impl Worker {
                 if let Some(a) = &self.audio {
                     a.sink.set_volume(self.volume);
                 }
+                let ui_vol = self.volume * 100.;
+                update(&self.ui, move |u| u.set_volume(ui_vol));
+                self.sync_snapshot();
                 self.db.save("volume", &self.volume.to_string())?
             }
             Command::Favorite(id) => {
@@ -713,11 +973,13 @@ impl Worker {
                     self.queue.retain(|id| !removed.contains(id));
                     if self.current.is_some_and(|id| removed.contains(&id)) {
                         self.audio.take();
+                        self.pos_offset = 0.;
                         self.current = None;
                         self.position = 0.;
                     }
                     self.persist()?;
                     self.show_player();
+                    self.sync_cover();
                 }
                 self.selected.clear();
                 self.refresh()?;
@@ -731,12 +993,14 @@ impl Worker {
                 self.queue.retain(|v| *v != id);
                 if self.current == Some(id) {
                     self.audio.take();
+                    self.pos_offset = 0.;
                     self.current = None;
                     self.position = 0.;
                 }
                 self.persist()?;
                 self.refresh()?;
                 self.show_player();
+                self.sync_cover();
                 status(&self.ui, "Removed from library. Original file kept.");
             }
             Command::NewPlaylist(name) => {
@@ -821,23 +1085,84 @@ impl Worker {
             Command::Shuffle(value) => {
                 self.shuffle = value;
                 self.db.save("shuffle", if value { "1" } else { "0" })?;
-                if value {
-                    let hash = std::collections::hash_map::RandomState::new();
-                    self.queue
-                        .sort_by_cached_key(|id| (Some(*id) != self.current, hash.hash_one(id)));
-                } else {
-                    self.queue = self
-                        .all
-                        .iter()
-                        .map(|t| t.id)
-                        .filter(|id| self.queue.contains(id))
-                        .collect();
+                let mut pool = self.collection_ids();
+                if let Some(cur) = self.current {
+                    if !pool.contains(&cur) && self.all.iter().any(|t| t.id == cur) {
+                        pool.push(cur);
+                    }
                 }
+                if value {
+                    shuffle_ids(&mut pool, self.current, None);
+                }
+                self.queue = pool;
+                update(&self.ui, move |u| u.set_shuffle(value));
+                self.sync_snapshot();
                 self.persist()?;
             }
             Command::Repeat(value) => {
                 self.repeat = value.clamp(0, 2);
+                let rep = self.repeat;
+                update(&self.ui, move |u| u.set_repeat_mode(rep));
+                self.sync_snapshot();
                 self.db.save("repeat", &self.repeat.to_string())?
+            }
+            Command::Handoff {
+                id,
+                position,
+                play,
+                shuffle,
+                repeat,
+                volume,
+                reply,
+            } => {
+                let outcome = (|| -> Result<()> {
+                    if volume.is_finite() {
+                        self.volume = (volume / 100.).clamp(0., 1.);
+                        if let Some(a) = &self.audio {
+                            a.sink.set_volume(self.volume);
+                        }
+                        let ui_vol = self.volume * 100.;
+                        update(&self.ui, move |u| u.set_volume(ui_vol));
+                        self.db.save("volume", &self.volume.to_string())?;
+                    }
+                    self.shuffle = shuffle;
+                    self.db.save("shuffle", if shuffle { "1" } else { "0" })?;
+                    update(&self.ui, move |u| u.set_shuffle(shuffle));
+                    self.repeat = repeat.clamp(0, 2);
+                    let rep = self.repeat;
+                    update(&self.ui, move |u| u.set_repeat_mode(rep));
+                    self.db.save("repeat", &self.repeat.to_string())?;
+
+                    if id > 0 && self.all.iter().any(|t| t.id == id) {
+                        let mut pool = self.collection_ids();
+                        if !pool.contains(&id) {
+                            pool = self.all.iter().map(|t| t.id).collect();
+                        }
+                        if self.shuffle {
+                            shuffle_ids(&mut pool, Some(id), None);
+                        }
+                        self.queue = pool;
+                        let clean_pos = if position.is_finite() {
+                            position.max(0.)
+                        } else {
+                            0.
+                        };
+                        if play {
+                            self.start(id, clean_pos)?;
+                        } else {
+                            self.audio.take();
+                            self.pos_offset = 0.;
+                            self.current = Some(id);
+                            self.position = clean_pos;
+                            self.stopped = false;
+                            self.show_player();
+                            self.sync_cover();
+                            self.persist()?;
+                        }
+                    }
+                    Ok(())
+                })();
+                let _ = reply.send(outcome.map_err(|e| e.to_string()));
             }
             _ => {}
         }
@@ -850,6 +1175,7 @@ pub fn spawn(
     rx: mpsc::Receiver<Command>,
     tx: mpsc::Sender<Command>,
     cancel: Arc<AtomicBool>,
+    snapshot: Arc<Mutex<PlaybackSnapshot>>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let volume = db
@@ -902,11 +1228,14 @@ pub fn spawn(
             queue,
             current,
             position,
+            pos_offset: 0.,
             audio: None,
             volume,
             shuffle,
             repeat,
+            stopped: false,
             last_second: u64::MAX,
+            snapshot,
         };
         if let Err(e) = state.refresh() {
             status(&state.ui, format!("Library error: {e}"));
@@ -921,7 +1250,16 @@ pub fn spawn(
             state.current = None;
             state.position = 0.;
         }
+        if state.shuffle || state.queue.is_empty() {
+            let mut pool = state.collection_ids();
+            if state.shuffle {
+                shuffle_ids(&mut pool, state.current, None);
+            }
+            state.queue = pool;
+            let _ = state.persist();
+        }
         state.show_player();
+        state.sync_cover();
         update(&state.ui, move |u| {
             u.set_volume(volume * 100.);
             u.set_shuffle(shuffle);
@@ -1080,14 +1418,17 @@ pub fn spawn(
                         status(&state.ui, e.to_string());
                     }
                 } else {
-                    let seconds = audio.sink.get_pos().as_secs();
+                    let live = state.pos_offset + audio.sink.get_pos().as_secs_f64();
+                    let seconds = live as u64;
                     if seconds != state.last_second {
                         state.last_second = seconds;
-                        state.position = audio.sink.get_pos().as_secs_f64();
+                        state.position = live;
+                        state.sync_snapshot();
                         let position = state.position;
                         update(&state.ui, move |u| {
                             u.set_position(position as f32);
                             u.set_elapsed(library::clock(position).into());
+                            u.invoke_transport_changed();
                         });
                     }
                 }
@@ -1195,9 +1536,9 @@ fn decode_cover(path: &str) -> Option<image::RgbaImage> {
             .with_guessed_format()
             .ok()?;
         let mut limits = image::Limits::default();
-        limits.max_image_width = Some(2048);
-        limits.max_image_height = Some(2048);
-        limits.max_alloc = Some(32 * 1024 * 1024);
+        limits.max_image_width = Some(4096);
+        limits.max_image_height = Some(4096);
+        limits.max_alloc = Some(64 * 1024 * 1024);
         reader.limits(limits);
         Some(reader.decode().ok()?.into_rgba8())
     }
@@ -1245,7 +1586,17 @@ pub(crate) fn row_cover(path: &str) -> Option<Art> {
 }
 
 fn cover(path: &str) -> Option<(Art, Art)> {
-    let decoded = image::DynamicImage::ImageRgba8(decode_cover(path)?)
+    let raw = decode_cover(path)?;
+    let side = raw.width().min(raw.height());
+    let square = image::imageops::crop_imm(
+        &raw,
+        (raw.width() - side) / 2,
+        (raw.height() - side) / 2,
+        side,
+        side,
+    )
+    .to_image();
+    let decoded = image::DynamicImage::ImageRgba8(square)
         .thumbnail(384, 384)
         .into_rgba8();
     let span = decoded.width().min(decoded.height());
@@ -1392,5 +1743,47 @@ mod tests {
         let mut art = image::RgbaImage::from_pixel(32, 32, image::Rgba([0, 255, 0, 255]));
         rounded_alpha(&mut art, 0);
         assert_eq!(art.get_pixel(0, 0).0[3], 255);
+    }
+
+    #[test]
+    fn shuffle_ids_reshuffles_freshly_and_avoids_boundary_repeat() {
+        let base: Vec<i64> = (1..=40).collect();
+        let mut first = base.clone();
+        shuffle_ids(&mut first, Some(17), None);
+        assert_eq!(first[0], 17);
+        assert_eq!(first.len(), 40);
+
+        let mut second = base.clone();
+        shuffle_ids(&mut second, Some(17), None);
+        assert_eq!(second[0], 17);
+        assert_ne!(first, second, "each shuffle must draw fresh OS entropy");
+
+        for _ in 0..32 {
+            let mut wrapped = base.clone();
+            shuffle_ids(&mut wrapped, None, Some(40));
+            assert_ne!(wrapped[0], 40, "wrap-around shuffle must avoid repeating last track");
+        }
+    }
+
+    #[test]
+    fn cover_center_crops_widescreen_webp_to_square_with_rounded_corners() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio = dir.path().join("somber.m4a");
+        std::fs::write(&audio, b"not-parsed-by-lofty").unwrap();
+        let sidecar = audio.with_extension("webp");
+        let bg = image::Rgba([10, 10, 10, 255]);
+        let mut widescreen = image::RgbaImage::from_pixel(1280, 720, bg);
+        for y in 180..540 {
+            for x in 460..820 {
+                widescreen.put_pixel(x, y, image::Rgba([210, 70, 90, 255]));
+            }
+        }
+        widescreen.save(&sidecar).unwrap();
+        let (bar, expanded) = cover(audio.to_str().unwrap()).expect("1280x720 webp cover");
+        assert_eq!((bar.width, bar.height), (384, 384));
+        assert_eq!((expanded.width, expanded.height), (384, 384));
+        assert_eq!(bar.bytes[3], 0, "top-left corner must stay rounded");
+        let center = ((192 * 384 + 192) * 4) as usize;
+        assert!(bar.bytes[center] > 180, "center-cropped subject preserved");
     }
 }

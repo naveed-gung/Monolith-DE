@@ -11,6 +11,7 @@ export struct ShareSong {
     detail: string,
     duration: string,
     thumbnail: image,
+    checked: bool,
 }
 
 export struct ShareDevice {
@@ -39,6 +40,64 @@ component PillBadge inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         accessible-role: none;
+    }
+}
+
+component ActionPill inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    private property <bool> hot: touch.has-hover && root.enabled;
+    private property <bool> down: touch.pressed && root.enabled;
+    private property <bool> focus-visible;
+
+    height: 22px;
+    width: label.preferred-width + 16px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: Theme.radius-pill;
+    background: root.down ? Theme.pressed : root.hot ? Theme.hover : Theme.surface-strong;
+    border-width: root.focus-visible ? 1.5px : 1px;
+    border-color: root.focus-visible ? Theme.accent : root.hot ? Theme.border-strong : Theme.border;
+    opacity: root.enabled ? 1 : 0.4;
+    animate background, border-color, opacity { duration: Theme.fast; }
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    forward-focus: focus;
+
+    label := Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        color: root.hot ? Theme.foreground : Theme.secondary;
+        font-size: Theme.type-caption;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+    focus := FocusScope {
+        width: 0px;
+        enabled: root.enabled;
+        focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+        focus-lost(reason) => { root.focus-visible = false; }
+        key-pressed(event) => {
+            if event.text == " " || event.text == "\n" {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
     }
 }
 
@@ -455,7 +514,7 @@ component ShareSongRow inherits Rectangle {
                 width: 20px;
                 height: 20px;
                 horizontal-stretch: 0;
-                border-radius: 10px;
+                border-radius: 6px;
                 background: root.selected ? Theme.accent : transparent;
                 border-width: root.selected ? 0px : 1.5px;
                 border-color: root.hot ? Theme.secondary : Theme.border-strong;
@@ -619,32 +678,50 @@ component ShareDeviceRow inherits Rectangle {
 component SongsPickerCard inherits Card {
     in property <bool> compact: false;
     min-width: 0px;
+    clip: true;
     VerticalLayout {
         min-width: 0px;
         padding: 12px;
         spacing: 10px;
 
         HorizontalLayout {
+            min-width: 0px;
             alignment: space-between;
             cross-axis-alignment: center;
             spacing: 8px;
             SectionLabel {
-                text: SharingState.batch ? "SELECTED SONGS · A–Z" : "CHOOSE A SONG · A–Z";
+                min-width: 0px;
+                horizontal-stretch: 1;
+                overflow: elide;
+                text: "CHOOSE SONGS · A–Z";
             }
-            PillBadge {
-                text: SharingState.batch ? "\{SharingState.songs.length} locked"
-                    : SharingState.song-query != "" ? "\{SharingState.song-results.length} of \{SharingState.songs.length}"
-                    : "\{SharingState.songs.length} tracks";
-                accent: SharingState.song-query != "";
+            HorizontalLayout {
+                horizontal-stretch: 0;
+                spacing: 6px;
+                cross-axis-alignment: center;
+                if !root.compact && SharingState.song-results.length > 0: ActionPill {
+                    text: SharingState.all-filtered-selected
+                        ? (SharingState.song-query != "" ? "Unselect shown" : "Unselect all")
+                        : (SharingState.song-query != "" ? "Select shown" : "Select all");
+                    enabled: !SharingState.busy;
+                    clicked => { SharingState.toggle-filtered-songs(); }
+                }
+                if SharingState.selected-count > 0 && !(SharingState.all-filtered-selected && SharingState.song-query == "" && !root.compact): ActionPill {
+                    text: "Clear";
+                    enabled: !SharingState.busy;
+                    clicked => { SharingState.clear-selected-songs(); }
+                }
+                PillBadge {
+                    text: SharingState.selected-count > 0 ? "\{SharingState.selected-count} selected"
+                        : SharingState.song-query != "" ? "\{SharingState.song-results.length} of \{SharingState.songs.length}"
+                        : "\{SharingState.songs.length} tracks";
+                    accent: SharingState.selected-count > 0 || SharingState.song-query != "";
+                }
             }
         }
 
-        if SharingState.batch: Caption {
+        if SharingState.songs.length > 0: HorizontalLayout {
             min-width: 0px;
-            text: "\{SharingState.songs.length} selected songs. Change this selection in Library or Songs.";
-        }
-
-        if !SharingState.batch && SharingState.songs.length > 0: HorizontalLayout {
             spacing: 6px;
             cross-axis-alignment: center;
             TextField {
@@ -652,7 +729,7 @@ component SongsPickerCard inherits Card {
                 horizontal-stretch: 1;
                 text <=> SharingState.song-query;
                 placeholder: "Filter A–Z by title, artist, or album…";
-                label: "Find a song to share";
+                label: "Find songs to share";
                 icon: @image-url("icons/search.svg");
                 enabled: !SharingState.busy;
                 edited => { SharingState.filter-songs(); }
@@ -671,6 +748,7 @@ component SongsPickerCard inherits Card {
         }
 
         Rectangle {
+            min-width: 0px;
             vertical-stretch: 1;
             min-height: 112px;
             border-radius: Theme.radius-control;
@@ -687,10 +765,10 @@ component SongsPickerCard inherits Card {
                 for song in SharingState.song-results: ShareSongRow {
                     song: song;
                     compact: root.compact;
-                    selected: SharingState.batch || SharingState.song-index == song.index;
-                    enabled: !SharingState.batch && !SharingState.busy;
+                    selected: song.checked;
+                    enabled: !SharingState.busy;
                     request-thumbnail(id) => { SharingState.request-thumbnail(id); }
-                    clicked => { SharingState.select-song(song.index); }
+                    clicked => { SharingState.toggle-song(song.id); }
                 }
             }
 
@@ -824,6 +902,7 @@ component TransferDockCard inherits Card {
     in property <bool> compact: false;
     min-width: 0px;
     vertical-stretch: 0;
+    clip: true;
 
     VerticalLayout {
         min-width: 0px;
@@ -831,6 +910,7 @@ component TransferDockCard inherits Card {
         spacing: 10px;
 
         HorizontalLayout {
+            min-width: 0px;
             spacing: 10px;
             cross-axis-alignment: center;
 
@@ -871,9 +951,9 @@ component TransferDockCard inherits Card {
                 spacing: 2px;
                 Text {
                     min-width: 0px;
-                    text: SharingState.batch ? "\{SharingState.songs.length} selected songs queued"
-                        : SharingState.selected-title != "" ? SharingState.selected-title
-                        : "Select a song above";
+                    text: SharingState.selected-count > 1 ? "\{SharingState.selected-count} songs selected"
+                        : SharingState.selected-count == 1 && SharingState.selected-title != "" ? SharingState.selected-title
+                        : "Choose songs to share";
                     color: Theme.foreground;
                     font-size: Theme.type-body;
                     font-weight: 600;
@@ -881,9 +961,13 @@ component TransferDockCard inherits Card {
                 }
                 Text {
                     min-width: 0px;
-                    text: root.target-name != "" ? "Recipient: " + root.target-name
+                    text: SharingState.selected-count > 1
+                        ? (root.target-name != ""
+                            ? SharingState.selected-title + " + \{SharingState.selected-count - 1} more · To " + root.target-name
+                            : SharingState.selected-title + " + \{SharingState.selected-count - 1} more · Pick a device")
+                        : root.target-name != "" ? "Recipient: " + root.target-name
                         : SharingState.selected-detail != "" ? SharingState.selected-detail + " · Pick a device"
-                        : "Pick a recipient device";
+                        : "Check one or more songs, then pick a device";
                     color: root.target-name != "" ? Theme.accent : Theme.muted;
                     font-size: Theme.type-label;
                     overflow: elide;
@@ -891,14 +975,15 @@ component TransferDockCard inherits Card {
             }
 
             if !root.compact: HorizontalLayout {
+                horizontal-stretch: 0;
                 spacing: 8px;
                 cross-axis-alignment: center;
                 if !SharingState.busy && !SharingState.listening: Button {
-                    text: SharingState.batch ? "Send selected songs" : "Send song";
+                    text: SharingState.selected-count > 1 ? "Send \{SharingState.selected-count} songs" : "Send song";
                     kind: ButtonKind.primary;
                     icon: @image-url("icons/share.svg");
-                    enabled: SharingState.available && SharingState.song-index >= 0 && SharingState.device-index >= 0;
-                    clicked => { SharingState.send-song(SharingState.song-index, SharingState.device-index); }
+                    enabled: SharingState.available && SharingState.selected-count > 0 && SharingState.device-index >= 0;
+                    clicked => { SharingState.send-song(0, SharingState.device-index); }
                 }
                 if SharingState.method == 2 && !SharingState.busy && !SharingState.listening: Button {
                     text: "Receive";
@@ -919,11 +1004,11 @@ component TransferDockCard inherits Card {
         if root.compact: HorizontalLayout {
             spacing: 8px;
             if !SharingState.busy && !SharingState.listening: Button {
-                text: SharingState.batch ? "Send selected songs" : "Send song";
+                text: SharingState.selected-count > 1 ? "Send \{SharingState.selected-count} songs" : "Send song";
                 kind: ButtonKind.primary;
                 icon: @image-url("icons/share.svg");
-                enabled: SharingState.available && SharingState.song-index >= 0 && SharingState.device-index >= 0;
-                clicked => { SharingState.send-song(SharingState.song-index, SharingState.device-index); }
+                enabled: SharingState.available && SharingState.selected-count > 0 && SharingState.device-index >= 0;
+                clicked => { SharingState.send-song(0, SharingState.device-index); }
             }
             if SharingState.method == 2 && !SharingState.busy && !SharingState.listening: Button {
                 text: "Receive";
@@ -942,8 +1027,13 @@ export global SharingState {
     in-out property <[string]> songs;
     in-out property <[ShareSong]> song-results;
     in-out property <string> song-query;
+    in-out property <int> selected-count: 0;
+    in-out property <bool> all-filtered-selected: false;
     callback filter-songs;
     callback select-song(int);
+    callback toggle-song(int);
+    callback toggle-filtered-songs;
+    callback clear-selected-songs;
     callback request-thumbnail(int);
     in-out property <string> selected-title;
     in-out property <string> selected-detail;
@@ -981,13 +1071,15 @@ export global SharingState {
 export component SharePage inherits FocusScope {
     // Stage width breakpoints (sidebar is already subtracted by AppShell):
     // - Half-screen tiled 1920x1080 with expanded sidebar -> width ~ 635px, height ~ 910px
-    // - Fullscreen / wide window -> width >= 740px
+    // - Fullscreen / wide window -> width >= 760px
     // - Minimum window -> width ~ 340px, height ~ 250px
     private property <bool> cards-side-by-side: root.width >= 560px;
     private property <bool> split-columns: root.width >= 760px && root.height >= 500px;
     private property <bool> tall-workspace: root.height >= 540px;
     private property <bool> compact: root.width < 520px;
     private property <bool> short: root.height < 500px;
+    private property <length> side-panel-width: clamp(336px, (root.width - 14px) * 0.38, 490px);
+    private property <bool> side-panel-compact: root.side-panel-width < 410px;
     private property <string> selected-device-name: SharingState.device-index >= 0 && SharingState.device-index < SharingState.device-items.length
         ? SharingState.device-items[SharingState.device-index].name : "";
 
@@ -1104,7 +1196,7 @@ export component SharePage inherits FocusScope {
                 padding: 2px;
                 spacing: 14px;
 
-                if SharingState.batch && SharingState.songs.length > 0: Card {
+                if SharingState.selected-count > 0: Card {
                     background: Theme.hero;
                     border-color: Theme.accent.with-alpha(0.38);
                     HorizontalLayout {
@@ -1130,13 +1222,15 @@ export component SharePage inherits FocusScope {
                             spacing: 2px;
                             Text {
                                 min-width: 0px;
-                                text: "\{SharingState.songs.length} selected songs ready to send";
+                                text: SharingState.selected-count == 1
+                                    ? "1 selected song ready to send"
+                                    : "\{SharingState.selected-count} selected songs ready to send";
                                 color: Theme.foreground;
                                 font-size: Theme.type-body;
                                 font-weight: 600;
                                 overflow: elide;
                             }
-                            Caption { min-width: 0px; text: "Pick Wi-Fi or Bluetooth below to send this selection."; }
+                            Caption { min-width: 0px; text: "Pick Wi-Fi or Bluetooth below, or adjust your selection inside the workspace."; }
                         }
                     }
                 }
@@ -1422,29 +1516,36 @@ export component SharePage inherits FocusScope {
             }
 
             // Layout A: Wide 2-Column Split (fullscreen / wide windows >= 760px stage)
+            // Explicit bounded width on the right column + preferred-width: 0px on the
+            // left song list prevents long song titles from ever crushing the right panel.
             if !SharingState.incoming && !SharingState.listening && root.split-columns: HorizontalLayout {
+                min-width: 0px;
                 vertical-stretch: 1;
-                spacing: 12px;
+                spacing: 14px;
 
                 SongsPickerCard {
-                    horizontal-stretch: 3;
+                    preferred-width: 0px;
+                    min-width: 0px;
+                    horizontal-stretch: 1;
                     vertical-stretch: 1;
                 }
 
                 VerticalLayout {
-                    min-width: 0px;
-                    horizontal-stretch: 2;
+                    width: root.side-panel-width;
+                    horizontal-stretch: 0;
                     vertical-stretch: 1;
                     spacing: 10px;
 
                     DevicesPickerCard {
+                        min-width: 0px;
                         vertical-stretch: 1;
-                        compact: true;
+                        compact: root.side-panel-compact;
                     }
 
                     TransferDockCard {
+                        min-width: 0px;
                         target-name: root.selected-device-name;
-                        compact: true;
+                        compact: root.side-panel-compact;
                     }
                 }
             }
