@@ -87,8 +87,8 @@ pub(crate) fn shuffle_ids(ids: &mut [i64], pin_first: Option<i64>, avoid_first: 
     if ids.len() <= 1 {
         return;
     }
-    let mut rng = fresh_entropy_seed()
-        ^ SHUFFLE_COUNTER.fetch_add(0x517C_C1B7_2722_0A95, Ordering::Relaxed);
+    let mut rng =
+        fresh_entropy_seed() ^ SHUFFLE_COUNTER.fetch_add(0x517C_C1B7_2722_0A95, Ordering::Relaxed);
     let start = if let Some(pin) = pin_first {
         if let Some(pos) = ids.iter().position(|x| *x == pin) {
             ids.swap(0, pos);
@@ -422,9 +422,9 @@ impl Worker {
         self.apply_filter()
     }
     fn live_position(&self) -> f64 {
-        self.audio
-            .as_ref()
-            .map_or(self.position, |a| self.pos_offset + a.sink.get_pos().as_secs_f64())
+        self.audio.as_ref().map_or(self.position, |a| {
+            self.pos_offset + a.sink.get_pos().as_secs_f64()
+        })
     }
     fn persist(&self) -> Result<()> {
         let cur = self.current.unwrap_or(-1).to_string();
@@ -1761,7 +1761,10 @@ mod tests {
         for _ in 0..32 {
             let mut wrapped = base.clone();
             shuffle_ids(&mut wrapped, None, Some(40));
-            assert_ne!(wrapped[0], 40, "wrap-around shuffle must avoid repeating last track");
+            assert_ne!(
+                wrapped[0], 40,
+                "wrap-around shuffle must avoid repeating last track"
+            );
         }
     }
 

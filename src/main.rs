@@ -183,7 +183,9 @@ fn run() -> Result<()> {
     app.set_reduce_motion(!native::animations_enabled());
     let (tx, rx) = mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
-    let snapshot = Arc::new(std::sync::Mutex::new(controller::PlaybackSnapshot::default()));
+    let snapshot = Arc::new(std::sync::Mutex::new(
+        controller::PlaybackSnapshot::default(),
+    ));
     let worker = controller::spawn(
         db,
         app.as_weak(),
